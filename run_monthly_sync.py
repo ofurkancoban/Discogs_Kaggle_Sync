@@ -15,6 +15,7 @@ import logging
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from discogs_kaggle_sync import converter, cover_art, downloader, kaggle_publish, logging_setup, notebook, scraper, state, web_metadata
@@ -242,11 +243,29 @@ def main() -> int:
         # The score fill_descriptions saw above predates the notebook existing, so it
         # can't reflect publicKernelScore yet - re-read the live rating now that
         # everything (descriptions, provenance, notebook) is actually in place.
+        #
+        # Kaggle's rating recompute lags the underlying state by a bit even after the
+        # notebook run and description writes have genuinely finished (seen in production:
+        # 2026-03/04 both read back an imperfect score immediately afterward, then were
+        # confirmed a perfect 1.0 within minutes) - the same propagation delay already
+        # found for wait_for_dataset_ready, just on the score-read side instead of the
+        # dataset-status side. Poll for up to an hour before accepting whatever it reports -
+        # there's no rush here, and a single point-in-time read wrongly deciding the month
+        # isn't done is what leaves tens of GB of local files in place for nothing (and,
+        # compounded across several months in a row, once filled the disk completely).
         usability_score: float | None = None
         try:
             client = web_metadata.KaggleWebClient()
             basics = client.dataset_basics(args.kaggle_owner, dataset_slug)
-            usability_score = client.usability_rating(basics["datasetId"]).get("score")
+            dataset_id = basics["datasetId"]
+            score_deadline = time.time() + 3600
+            while True:
+                usability_score = client.usability_rating(dataset_id).get("score")
+                if usability_score is not None and usability_score >= 0.999:
+                    break
+                if time.time() >= score_deadline:
+                    break
+                time.sleep(60)
             logger.info("%s final usability rating: %s", month, usability_score)
         except Exception as e:
             logger.warning("Could not confirm final usability rating for %s: %s", month, e)
