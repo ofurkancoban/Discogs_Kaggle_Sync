@@ -3,6 +3,8 @@ __pycache__/
 .venv/
 venv/
 work/
+logs/
+node_modules/
 *.xml.gz
 *.xml
 *.csv

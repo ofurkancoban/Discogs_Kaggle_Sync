@@ -57,8 +57,17 @@ if Discogs re-uploads a corrected dump.
 
 ## Scheduling
 
-See [`crontab.example`](crontab.example) — runs on the 3rd of each month (a few days after
-Discogs typically publishes, as a buffer) via `crontab -e`.
+Runs **daily**, not on a fixed day of the month — `state/published_months.json` makes a
+run a no-op (exits in seconds) once the current month is already published, so a daily
+check costs almost nothing and catches whatever day Discogs actually publishes on, instead
+of guessing a fixed date and possibly missing it by a day or two.
+
+Two ways to schedule it, pick one:
+
+- **crontab** — see [`crontab.example`](crontab.example), installed via `crontab -e`.
+- **pm2** — see [`ecosystem.config.js`](ecosystem.config.js) if the VPS already uses pm2
+  for other processes (`pm2 start ecosystem.config.js`); gives you `pm2 logs`/`pm2 status`
+  for this job alongside everything else instead of a separate crontab entry.
 
 ## Column descriptions
 
