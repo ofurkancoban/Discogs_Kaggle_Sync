@@ -16,7 +16,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from discogs_kaggle_sync import converter, downloader, kaggle_publish, scraper, state
+from discogs_kaggle_sync import converter, cover_art, downloader, kaggle_publish, scraper, state
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,8 +75,11 @@ def main() -> int:
             # Free disk immediately: the compressed dump isn't needed once its CSV exists.
             gz_path.unlink(missing_ok=True)
 
+        logger.info("Generating cover image for %s...", month)
+        cover_path = cover_art.generate_cover_image(month, staging_dir / "cover.png")
+
         logger.info("Building Kaggle dataset metadata...")
-        kaggle_publish.build_dataset_metadata(staging_dir, args.kaggle_owner, month, csv_files)
+        kaggle_publish.build_dataset_metadata(staging_dir, args.kaggle_owner, month, csv_files, cover_image_path=cover_path)
 
         logger.info("Publishing to Kaggle...")
         kaggle_publish.publish_dataset(staging_dir)

@@ -1,9 +1,19 @@
-"""Builds a Kaggle dataset-metadata.json (with per-column descriptions) and publishes
-a new dataset for the month via the Kaggle CLI.
+"""Builds a Kaggle dataset-metadata.json (full "About Dataset" description, per-file
+descriptions, provenance, license, per-column schema) and publishes a new dataset for
+the month via the Kaggle CLI.
 
 Each month gets its own dataset (matching the existing manually-published pattern:
 "Discogs Data Dumps (April 2025)", "(June 2025)", etc.) rather than versioning one
-ever-growing dataset.
+ever-growing dataset. All copy below is the exact text previously written by hand for
+these datasets, with the month/year and file format made dynamic.
+
+Note: `description`, `licenses`, `keywords`, and per-resource `description`/`schema` are
+documented, API-settable fields. Kaggle's web UI also has a "cover image" upload and an
+"Expected Update Frequency" setting for a dataset; neither is confirmed to be settable
+through the public create/version API, so those may still need a one-time manual check
+after the first automated publish. The generated cover image is included as a dataset
+file regardless (see cover_art.py), so it's available even if it can't be wired up as
+the card thumbnail automatically.
 """
 from __future__ import annotations
 
@@ -21,22 +31,25 @@ DESCRIPTIONS_DIR = MODULE_DIR / "column_descriptions"
 
 FILE_DESCRIPTIONS = {
     "artists": (
-        "Contains metadata on artists, including unique Discogs IDs, names, aliases, "
-        "profile descriptions, and associated URLs. Useful for studying artist "
-        "collaborations, discographies, and musical influences."
+        "• Contains metadata on artists, including unique Discogs IDs, names, aliases, "
+        "profile descriptions, and associated URLs.\n"
+        "• Useful for studying artist collaborations, discographies, and musical influences."
     ),
     "labels": (
-        "Contains metadata on record labels, including unique Discogs IDs, names, "
-        "parent/sublabel relationships, and associated URLs."
+        "• Includes record label information such as label names, parent labels, "
+        "catalog numbers, and URLs.\n"
+        "• Ideal for understanding label affiliations and discographies."
     ),
     "masters": (
-        "Contains metadata on master releases (the abstract work behind one or more "
-        "physical/digital pressings), including title, year, genres, styles, and credited artists."
+        "• Represents master releases that group together different versions of a "
+        "release (e.g., different formats, editions, and reissues).\n"
+        "• Helps in tracking variations of a single album across different releases."
     ),
     "releases": (
-        "Contains detailed metadata on individual releases/pressings, including title, "
-        "country, format, label, catalog number, tracklist, credited and extra artists, "
-        "and identifiers such as barcodes and matrix numbers."
+        "• The largest and most detailed file, containing metadata on individual "
+        "releases, including tracklists, formats, barcode information, and release dates.\n"
+        "• Essential for in-depth music cataloging, marketplace analysis, and historical "
+        "music research."
     ),
 }
 
@@ -53,11 +66,35 @@ def _csv_header(csv_path: Path) -> list[str]:
         return next(csv.reader(f))
 
 
+def _about_dataset(month_label: str) -> str:
+    return (
+        f"The Discogs Data Dumps ({month_label}) provide a comprehensive archive of the "
+        "Discogs music database, offering detailed metadata on releases, artists, labels, "
+        "and masters. This dataset includes structured information on millions of vinyl "
+        "records, CDs, digital releases, and more, making it an invaluable resource for "
+        "music researchers, collectors, and developers.\n\n"
+        "The archive is available in CSV format and contains various data files, including "
+        "release details, artist discographies, label catalogs, and user-generated "
+        "contributions. It is regularly updated and serves as a foundation for building "
+        "applications, analyzing music trends, and exploring Discogs' extensive music "
+        "catalog.\n\n"
+        "## Provenance\n\n"
+        f"**Sources**: The Discogs Data Dumps ({month_label}) were sourced directly from "
+        "the official Discogs Data Dumps web page. The original dataset was provided in "
+        "XML.GZ format, which was then processed and converted into CSV format "
+        "automatically.\n\n"
+        "**Collection Methodology**: Since the data is sourced directly from Discogs' open "
+        "database, it reflects real-world contributions from users worldwide, ensuring "
+        "accuracy and depth across different music genres and formats."
+    )
+
+
 def build_dataset_metadata(
     staging_dir: Path,
     owner_slug: str,
     month: str,  # "YYYY-MM"
     csv_files: dict[str, Path],  # content_type -> csv path, all inside staging_dir
+    cover_image_path: Path | None = None,  # optional, e.g. staging_dir / "cover.png"
 ) -> Path:
     """Writes dataset-metadata.json into staging_dir and returns its path."""
     year, month_num = month.split("-")
@@ -91,19 +128,18 @@ def build_dataset_metadata(
             "schema": {"fields": fields},
         })
 
+    if cover_image_path is not None and cover_image_path.exists():
+        resources.append({
+            "path": cover_image_path.name,
+            "description": f"Cover image for the {month_label} dataset.",
+        })
+
     metadata = {
         "title": f"Discogs Data Dumps ({month_label})",
         "id": f"{owner_slug}/{dataset_slug}",
         "licenses": [{"name": "CC0-1.0"}],
-        "description": (
-            f"The Discogs Data Dumps ({month_label}) provide a comprehensive archive of the "
-            "Discogs music database, offering detailed metadata on releases, artists, labels, "
-            "and masters. This dataset includes structured information on millions of vinyl "
-            "records, CDs, digital releases, and more, making it an invaluable resource for "
-            "music researchers, collectors, and developers.\n\n"
-            "Sourced directly from the official Discogs Data Dumps and converted from XML.GZ "
-            "to CSV. Published automatically on a monthly cadence."
-        ),
+        "keywords": ["music"],
+        "description": _about_dataset(month_label),
         "resources": resources,
     }
 
