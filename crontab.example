@@ -1,0 +1,8 @@
+# Discogs -> Kaggle monthly sync
+#
+# Discogs publishes new dumps around the 1st of each month; running on the 3rd gives
+# a buffer in case that's delayed. Runs at 06:00 server time.
+#
+# Install with: crontab -e   (then paste the line below, adjusting paths)
+
+0 6 3 * * cd /path/to/Discogs_Kaggle_Sync && /path/to/venv/bin/python run_monthly_sync.py --work-dir ./work --kaggle-owner ofurkancoban >> logs/sync.log 2>&1

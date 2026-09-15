@@ -1,0 +1,15 @@
+{
+  "artists_artist_id": "Unique Discogs identifier for the artist.",
+  "artists_artist_name": "The artist's primary/credited name as listed on Discogs.",
+  "artists_artist_realname": "The artist's real or legal name, when documented.",
+  "artists_artist_profile": "Free-text biography or profile description of the artist.",
+  "artists_artist_data_quality": "Discogs community data-quality flag for this entry (e.g. Correct, Needs Vote, Needs Major Changes).",
+  "artist_urls_url": "External reference URLs for the artist (website, Wikipedia, social media). A JSON array when multiple exist.",
+  "artist_namevariations_name": "Alternate spellings or variations of the artist's name seen across releases.",
+  "artist_aliases_name": "Names of other Discogs artist entries considered aliases of this artist.",
+  "artist_aliases_name_id": "Discogs artist IDs corresponding to each alias in artist_aliases_name.",
+  "artist_groups_name": "Names of groups/bands this artist is credited as a member of.",
+  "artist_groups_name_id": "Discogs artist IDs corresponding to each group in artist_groups_name.",
+  "artist_members_name": "Names of individual members belonging to this artist entry, when the artist is a group/band.",
+  "artist_members_name_id": "Discogs artist IDs corresponding to each member in artist_members_name."
+}

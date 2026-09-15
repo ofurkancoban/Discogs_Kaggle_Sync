@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+work/
+*.xml.gz
+*.xml
+*.csv
+.DS_Store
+.env

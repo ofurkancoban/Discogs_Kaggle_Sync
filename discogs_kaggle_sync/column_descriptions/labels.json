@@ -1,0 +1,12 @@
+{
+  "labels_label_id": "Unique Discogs identifier for the label.",
+  "labels_label_name": "The label's name as listed on Discogs.",
+  "labels_label_contactinfo": "Contact information provided for the label (address, email, etc.), when documented.",
+  "labels_label_profile": "Free-text description/history of the label.",
+  "labels_label_data_quality": "Discogs community data-quality flag for this entry (e.g. Correct, Needs Vote, Needs Major Changes).",
+  "label_urls_url": "External reference URLs for the label (website, socials). A JSON array when multiple exist.",
+  "label_sublabels_label": "Names of sublabels/imprints operating under this label.",
+  "label_sublabels_label_id": "Discogs label IDs corresponding to each sublabel in label_sublabels_label.",
+  "labels_label_parentlabel": "Name of this label's parent label, if it is itself a sublabel/imprint.",
+  "labels_label_parentlabel_id": "Discogs label ID of the parent label named in labels_label_parentlabel."
+}

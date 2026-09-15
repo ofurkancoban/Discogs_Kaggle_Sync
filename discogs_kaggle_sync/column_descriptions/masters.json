@@ -1,0 +1,15 @@
+{
+  "masters_master_id": "Unique Discogs identifier for the master release.",
+  "masters_master_main_release": "Discogs release ID of the specific pressing chosen as this master's primary/representative release.",
+  "masters_master_title": "Title of the master release (the abstract work, independent of any specific pressing).",
+  "masters_master_year": "Year the work was originally released, as recorded on the master.",
+  "masters_master_data_quality": "Discogs community data-quality flag for this entry (e.g. Correct, Needs Vote, Needs Major Changes).",
+  "master_genres_genre": "Broad genre tag(s) assigned to the master (e.g. Electronic, Rock, Jazz). A JSON array when multiple exist.",
+  "master_styles_style": "More specific style tag(s) within the genre (e.g. Techno, House, Ambient). A JSON array when multiple exist.",
+  "artists_artist_id": "Discogs ID of an artist credited on the master.",
+  "artists_artist_name": "Name of an artist credited on the master.",
+  "master_videos_video_src": "Source URL of an embedded video associated with the master (e.g. an official YouTube link).",
+  "master_videos_video_duration": "Duration in seconds of the video at master_videos_video_src.",
+  "videos_video_title": "Title of an embedded video.",
+  "videos_video_description": "Description text of an embedded video."
+}
