@@ -20,6 +20,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import sys
 import subprocess
 from calendar import month_name
 from pathlib import Path
@@ -150,8 +151,15 @@ def build_dataset_metadata(
 
 def publish_dataset(staging_dir: Path) -> None:
     """Runs `kaggle datasets create` for the metadata/CSVs staged in `staging_dir`."""
+    # Resolve the CLI next to the current interpreter (sys.executable) rather than trusting
+    # PATH: when this script is invoked as `/path/to/venv/bin/python run_monthly_sync.py`
+    # without activating the venv first, a bare "kaggle" isn't on PATH even though it's
+    # installed right there in the venv's bin/ alongside python.
+    kaggle_bin = Path(sys.executable).parent / "kaggle"
+    kaggle_cmd = str(kaggle_bin) if kaggle_bin.exists() else "kaggle"
+
     result = subprocess.run(
-        ["kaggle", "datasets", "create", "-p", str(staging_dir), "-r", "skip"],
+        [kaggle_cmd, "datasets", "create", "-p", str(staging_dir), "-r", "skip"],
         capture_output=True, text=True,
     )
     logger.info("kaggle datasets create stdout: %s", result.stdout.strip())

@@ -7,6 +7,6 @@
   "label_urls_url": "External reference URLs for the label (website, socials). A JSON array when multiple exist.",
   "label_sublabels_label": "Names of sublabels/imprints operating under this label.",
   "label_sublabels_label_id": "Discogs label IDs corresponding to each sublabel in label_sublabels_label.",
-  "labels_label_parentlabel": "Name of this label's parent label, if it is itself a sublabel/imprint.",
-  "labels_label_parentlabel_id": "Discogs label ID of the parent label named in labels_label_parentlabel."
+  "labels_label_parentLabel": "Name of this label's parent label, if it is itself a sublabel/imprint. (Confirmed from a real run: Discogs' XML tag is camelCase, not all-lowercase.)",
+  "labels_label_parentLabel_id": "Discogs label ID of the parent label named in labels_label_parentLabel."
 }

@@ -8,8 +8,12 @@
   "master_styles_style": "More specific style tag(s) within the genre (e.g. Techno, House, Ambient). A JSON array when multiple exist.",
   "artists_artist_id": "Discogs ID of an artist credited on the master.",
   "artists_artist_name": "Name of an artist credited on the master.",
+  "artists_artist_anv": "Artist Name Variation: how the artist is credited on this specific master, if different from their canonical artists_artist_name.",
+  "artists_artist_join": "Join phrase connecting this artist credit to the next one (e.g. \"&\", \"Featuring\", \"vs.\") when a master has multiple credited artists.",
+  "masters_master_notes": "Free-text notes about the master release.",
   "master_videos_video_src": "Source URL of an embedded video associated with the master (e.g. an official YouTube link).",
   "master_videos_video_duration": "Duration in seconds of the video at master_videos_video_src.",
+  "master_videos_video_embed": "Whether the video player should be embedded (\"true\"/\"false\").",
   "videos_video_title": "Title of an embedded video.",
   "videos_video_description": "Description text of an embedded video."
 }

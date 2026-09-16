@@ -57,12 +57,21 @@ def main() -> int:
     csv_files: dict[str, Path] = {}
     try:
         for content_type, dump in by_type.items():
+            csv_name = Path(dump.filename).with_suffix("").with_suffix(".csv").name
+            csv_path = staging_dir / csv_name
+
+            if csv_path.exists():
+                # Resuming after a failure past this point (e.g. the publish step) — the
+                # CSV conversion is the expensive part (hours for releases), so a retry
+                # must not redo it just because a later step failed.
+                logger.info("%s already converted, reusing %s", dump.filename, csv_path.name)
+                csv_files[content_type] = csv_path
+                continue
+
             gz_path = work_dir / dump.filename
             logger.info("Downloading %s (%s)...", dump.filename, dump.size_display)
             downloader.download(dump.url, gz_path)
 
-            csv_name = Path(dump.filename).with_suffix("").with_suffix(".csv").name
-            csv_path = staging_dir / csv_name
             logger.info("Converting %s -> %s ...", dump.filename, csv_name)
 
             def progress(step: int, total: int, _name=dump.filename) -> None:
@@ -75,8 +84,10 @@ def main() -> int:
             # Free disk immediately: the compressed dump isn't needed once its CSV exists.
             gz_path.unlink(missing_ok=True)
 
-        logger.info("Generating cover image for %s...", month)
-        cover_path = cover_art.generate_cover_image(month, staging_dir / "cover.png")
+        cover_path = staging_dir / "cover.png"
+        if not cover_path.exists():
+            logger.info("Generating cover image for %s...", month)
+            cover_art.generate_cover_image(month, cover_path)
 
         logger.info("Building Kaggle dataset metadata...")
         kaggle_publish.build_dataset_metadata(staging_dir, args.kaggle_owner, month, csv_files, cover_image_path=cover_path)
@@ -86,10 +97,18 @@ def main() -> int:
 
         state.mark_published(month)
         logger.info("Done: %s published to Kaggle.", month)
-        return 0
-    finally:
-        # Always reclaim disk, success or failure — these are multi-GB working sets.
+    except Exception:
+        logger.exception(
+            "Sync failed for %s. Leaving %s in place (not deleting) so a re-run can "
+            "resume from here instead of redoing hours of conversion work.",
+            month, work_dir,
+        )
+        return 1
+    else:
+        # Only reclaim disk on success — these are multi-GB working sets, but the whole
+        # point of keeping them on failure is so a retry is cheap.
         shutil.rmtree(work_dir, ignore_errors=True)
+        return 0
 
 
 if __name__ == "__main__":
