@@ -39,7 +39,13 @@ def download(url: str, destination: Path) -> Path:
                 if r.status_code == 416:  # already complete
                     return destination
                 r.raise_for_status()
-                mode = "ab" if downloaded else "wb"
+                # A range request can come back as 200 (full content) instead of 206
+                # (partial content) when the server ignores Range or when `total_size`
+                # was unknown (HEAD had no Content-Length, so the "already downloaded"
+                # guard above never triggered even for a complete file). Appending in
+                # that case would duplicate the whole file onto itself, so only append
+                # when the server actually confirmed a partial response.
+                mode = "ab" if downloaded and r.status_code == 206 else "wb"
                 with open(destination, mode) as f:
                     for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
                         if chunk:
