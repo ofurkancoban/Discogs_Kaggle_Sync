@@ -119,6 +119,12 @@ def main() -> int:
         logger.info("Publishing to Kaggle...")
         kaggle_publish.publish_dataset(staging_dir)
 
+        # `create` doesn't apply userSpecifiedSources (Provenance) or expectedUpdateFrequency
+        # — a second call against the now-existing dataset is required for those.
+        logger.info("Updating provenance/update-frequency settings...")
+        dataset_slug = kaggle_publish.dataset_slug_for(month)
+        kaggle_publish.update_dataset_settings(args.kaggle_owner, dataset_slug, staging_dir)
+
         state.mark_published(month)
         logger.info("Done: %s published to Kaggle.", month)
     except Exception:

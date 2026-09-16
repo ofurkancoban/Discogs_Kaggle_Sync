@@ -7,13 +7,16 @@ Each month gets its own dataset (matching the existing manually-published patter
 ever-growing dataset. All copy below is the exact text previously written by hand for
 these datasets, with the month/year and file format made dynamic.
 
-Note: `description`, `licenses`, `keywords`, and per-resource `description`/`schema` are
-documented, API-settable fields. Kaggle's web UI also has a "cover image" upload and an
-"Expected Update Frequency" setting for a dataset; neither is confirmed to be settable
-through the public create/version API, so those may still need a one-time manual check
-after the first automated publish. The generated cover image is included as a dataset
-file regardless (see cover_art.py), so it's available even if it can't be wired up as
-the card thumbnail automatically.
+Two separate CLI calls are needed to fully populate a dataset's "Pending Actions" list:
+
+1. `kaggle datasets create` — reads title/id/licenses/subtitle/description/keywords/
+   resources(schema) from dataset-metadata.json, plus auto-detects a sibling
+   "dataset-cover-image.<ext>" file (see cover_art.py). Confirmed by reading
+   `dataset_create_new()` in kaggle_api_extended.py.
+2. `kaggle datasets metadata <ref> --update -p <folder>` — reads the *same* metadata
+   file's `userSpecifiedSources` (-> the "Provenance / Sources" section) and
+   `expectedUpdateFrequency`, which `create` does not apply. Confirmed by reading
+   `dataset_metadata_update()` in the same file.
 """
 from __future__ import annotations
 
@@ -78,13 +81,24 @@ def _about_dataset(month_label: str) -> str:
         "release details, artist discographies, label catalogs, and user-generated "
         "contributions. It is regularly updated and serves as a foundation for building "
         "applications, analyzing music trends, and exploring Discogs' extensive music "
-        "catalog.\n\n"
-        "## Provenance\n\n"
-        f"**Sources**: The Discogs Data Dumps ({month_label}) were sourced directly from "
-        "the official Discogs Data Dumps web page. The original dataset was provided in "
-        "XML.GZ format, which was then processed and converted into CSV format "
-        "automatically.\n\n"
-        "**Collection Methodology**: Since the data is sourced directly from Discogs' open "
+        "catalog."
+    )
+
+
+def _subtitle(month_label: str) -> str:
+    # Must be 20-80 characters (enforced by the API) — keep this in sync if the wording
+    # changes, since a subtitle outside that range makes `datasets create` raise.
+    text = f"Discogs' full {month_label} music catalog: artists, labels, masters, releases"
+    assert 20 <= len(text) <= 80, f"subtitle length {len(text)} out of Kaggle's allowed 20-80 range"
+    return text
+
+
+def _provenance_sources(month_label: str) -> str:
+    return (
+        f"Sources: The Discogs Data Dumps ({month_label}) were sourced directly from the "
+        "official Discogs Data Dumps web page. The original dataset was provided in XML.GZ "
+        "format, which was then processed and converted into CSV format automatically.\n\n"
+        "Collection Methodology: Since the data is sourced directly from Discogs' open "
         "database, it reflects real-world contributions from users worldwide, ensuring "
         "accuracy and depth across different music genres and formats."
     )
@@ -144,9 +158,13 @@ def build_dataset_metadata(
     metadata = {
         "title": f"Discogs Data Dumps ({month_label})",
         "id": f"{owner_slug}/{dataset_slug}",
+        "subtitle": _subtitle(month_label),
         "licenses": [{"name": "CC0-1.0"}],
         "keywords": ["music"],
         "description": _about_dataset(month_label),
+        "isPrivate": False,
+        "userSpecifiedSources": _provenance_sources(month_label),
+        "expectedUpdateFrequency": "Monthly",
         "resources": resources,
     }
 
@@ -191,3 +209,19 @@ def publish_dataset(staging_dir: Path) -> None:
     if result.returncode != 0:
         logger.error("kaggle datasets create stderr: %s", result.stderr.strip())
         raise RuntimeError(f"Kaggle publish failed (exit {result.returncode})")
+
+
+def update_dataset_settings(owner_slug: str, dataset_slug: str, staging_dir: Path) -> None:
+    """Pushes the fields `datasets create` doesn't apply — userSpecifiedSources
+    (Provenance/Sources) and expectedUpdateFrequency — by re-reading the same
+    dataset-metadata.json against the now-existing dataset. Must run after
+    publish_dataset(); the ref has to already exist for this call to succeed."""
+    ref = f"{owner_slug}/{dataset_slug}"
+    result = subprocess.run(
+        [_kaggle_cmd(), "datasets", "metadata", ref, "--update", "-p", str(staging_dir)],
+        capture_output=True, text=True,
+    )
+    logger.info("kaggle datasets metadata --update stdout: %s", result.stdout.strip())
+    if result.returncode != 0:
+        logger.error("kaggle datasets metadata --update stderr: %s", result.stderr.strip())
+        raise RuntimeError(f"Kaggle metadata update failed for {ref} (exit {result.returncode})")

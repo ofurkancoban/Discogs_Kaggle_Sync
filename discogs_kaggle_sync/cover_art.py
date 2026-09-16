@@ -45,18 +45,30 @@ def _draw_text_with_drop_shadow(image: Image.Image, text: str, position: tuple[f
     bbox = dummy_draw.textbbox((0, 0), text, font=font)
     text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
+    # PIL's draw.text((x, y), ...) positions the pen origin, not the tight ink bounding
+    # box — bbox[0]/bbox[1] (left/top bearing) can be non-zero and differs per string
+    # (e.g. "2026" vs "SEPTEMBER"), so drawing directly at (base_x, base_y) without this
+    # correction silently misaligns strings that were centered using their tight bbox
+    # widths (as generate_cover_image does). This is exactly what caused the year/month
+    # to visibly not line up.
+    pen_x = base_x - bbox[0]
+    pen_y = base_y - bbox[1]
+
     # No spread/dilation step (dropped in the Swift version — it relied on Core Image's
     # CIMorphologyMaximum, which isn't needed here and complicated the mask for no visual
     # benefit at these text sizes). Just render the glyph shape and blur it.
     mask = Image.new("L", (text_width, text_height), 0)
-    ImageDraw.Draw(mask).text((0, 0), text, font=font, fill=255)
+    ImageDraw.Draw(mask).text((-bbox[0], -bbox[1]), text, font=font, fill=255)
     mask = mask.filter(ImageFilter.GaussianBlur(radius=SHADOW_BLUR_RADIUS))
 
     shadow = Image.new("RGBA", mask.size, (0, 0, 0, 255))
     shadow.putalpha(mask.point(lambda a: int(a * SHADOW_OPACITY)))
+    # The mask's (0, 0) corresponds to the tight-bbox top-left, which is exactly
+    # (base_x, base_y) by construction above, so the shadow offset doesn't need the
+    # bbox correction — only the real glyph draw below (via draw.text's pen semantics) does.
     image.alpha_composite(shadow, dest=(base_x + dx, base_y + dy))
 
-    ImageDraw.Draw(image).text((base_x, base_y), text, font=font, fill=(255, 255, 255, 255))
+    ImageDraw.Draw(image).text((pen_x, pen_y), text, font=font, fill=(255, 255, 255, 255))
 
 
 def generate_cover_image(
