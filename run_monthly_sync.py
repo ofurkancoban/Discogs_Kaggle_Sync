@@ -32,6 +32,18 @@ def main() -> int:
     parser.add_argument("--work-dir", type=Path, default=Path("./work"), help="Scratch directory for downloads/conversion.")
     parser.add_argument("--kaggle-owner", type=str, required=True, help="Kaggle username that owns the published datasets.")
     parser.add_argument("--force", action="store_true", help="Re-process even if this month was already published.")
+    parser.add_argument(
+        "--keep-staging", action="store_true",
+        help="Don't delete the staged CSVs/cover image after a successful publish. Use while "
+             "iterating on metadata/cover art/dataset settings: combine with --force on later "
+             "runs to re-publish in seconds instead of redoing hours of conversion.",
+    )
+    parser.add_argument(
+        "--replace-existing", action="store_true",
+        help="Delete the month's existing Kaggle dataset (if any) before publishing. Only "
+             "use this deliberately while iterating on one month — it permanently drops that "
+             "dataset's view/download/vote history. Never combine with an unattended cron run.",
+    )
     args = parser.parse_args()
 
     logger.info("Checking for the latest Discogs dump month...")
@@ -87,13 +99,22 @@ def main() -> int:
         # Must be named exactly "dataset-cover-image.<ext>" — the kaggle CLI auto-detects
         # this specific filename as a sibling of dataset-metadata.json and uploads it as
         # the dataset's actual cover image (not just a regular file in the listing).
+        # Regenerated every run (unlike the CSVs) so a --keep-staging iteration loop that's
+        # tweaking cover_art.py picks up each change instead of reusing a stale image.
         cover_path = staging_dir / "dataset-cover-image.png"
-        if not cover_path.exists():
-            logger.info("Generating cover image for %s...", month)
-            cover_art.generate_cover_image(month, cover_path)
+        logger.info("Generating cover image for %s...", month)
+        cover_art.generate_cover_image(month, cover_path)
 
         logger.info("Building Kaggle dataset metadata...")
         kaggle_publish.build_dataset_metadata(staging_dir, args.kaggle_owner, month, csv_files)
+
+        if args.replace_existing:
+            dataset_slug = kaggle_publish.dataset_slug_for(month)
+            logger.info("--replace-existing set: deleting %s/%s before re-publishing...", args.kaggle_owner, dataset_slug)
+            try:
+                kaggle_publish.delete_dataset(args.kaggle_owner, dataset_slug)
+            except RuntimeError as e:
+                logger.warning("Delete failed (dataset may not exist yet, continuing): %s", e)
 
         logger.info("Publishing to Kaggle...")
         kaggle_publish.publish_dataset(staging_dir)
@@ -109,8 +130,11 @@ def main() -> int:
         return 1
     else:
         # Only reclaim disk on success — these are multi-GB working sets, but the whole
-        # point of keeping them on failure is so a retry is cheap.
-        shutil.rmtree(work_dir, ignore_errors=True)
+        # point of keeping them on failure (or with --keep-staging) is so a retry is cheap.
+        if not args.keep_staging:
+            shutil.rmtree(work_dir, ignore_errors=True)
+        else:
+            logger.info("--keep-staging set: leaving %s in place for fast re-publish iteration.", work_dir)
         return 0
 
 

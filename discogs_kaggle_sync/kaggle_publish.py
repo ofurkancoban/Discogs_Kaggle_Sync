@@ -90,6 +90,13 @@ def _about_dataset(month_label: str) -> str:
     )
 
 
+def dataset_slug_for(month: str) -> str:
+    """"YYYY-MM" -> "discogs-data-dumps-<month-name>-<year>", matching the naming pattern
+    of the prior manually-published datasets."""
+    year, month_num = month.split("-")
+    return f"discogs-data-dumps-{month_name[int(month_num)].lower()}-{year}"
+
+
 def build_dataset_metadata(
     staging_dir: Path,
     owner_slug: str,
@@ -99,7 +106,7 @@ def build_dataset_metadata(
     """Writes dataset-metadata.json into staging_dir and returns its path."""
     year, month_num = month.split("-")
     month_label = f"{month_name[int(month_num)]} {year}"
-    dataset_slug = f"discogs-data-dumps-{month_name[int(month_num)].lower()}-{year}"
+    dataset_slug = dataset_slug_for(month)
 
     resources = []
     for content_type, csv_path in csv_files.items():
@@ -148,19 +155,36 @@ def build_dataset_metadata(
     return metadata_path
 
 
-def publish_dataset(staging_dir: Path) -> None:
-    """Runs `kaggle datasets create` for the metadata/CSVs staged in `staging_dir`."""
+def _kaggle_cmd() -> str:
     # Resolve the CLI next to the current interpreter (sys.executable) rather than trusting
     # PATH: when this script is invoked as `/path/to/venv/bin/python run_monthly_sync.py`
     # without activating the venv first, a bare "kaggle" isn't on PATH even though it's
     # installed right there in the venv's bin/ alongside python.
     kaggle_bin = Path(sys.executable).parent / "kaggle"
-    kaggle_cmd = str(kaggle_bin) if kaggle_bin.exists() else "kaggle"
+    return str(kaggle_bin) if kaggle_bin.exists() else "kaggle"
 
+
+def delete_dataset(owner_slug: str, dataset_slug: str) -> None:
+    """Permanently deletes an existing dataset. Only call this when the caller has
+    explicit intent to replace it (e.g. a --replace-existing flag) — this cannot be undone
+    and drops the dataset's view/download/vote history."""
+    ref = f"{owner_slug}/{dataset_slug}"
+    result = subprocess.run(
+        [_kaggle_cmd(), "datasets", "delete", "-y", ref],
+        capture_output=True, text=True,
+    )
+    logger.info("kaggle datasets delete stdout: %s", result.stdout.strip())
+    if result.returncode != 0:
+        logger.error("kaggle datasets delete stderr: %s", result.stderr.strip())
+        raise RuntimeError(f"Kaggle delete failed for {ref} (exit {result.returncode})")
+
+
+def publish_dataset(staging_dir: Path) -> None:
+    """Runs `kaggle datasets create` for the metadata/CSVs staged in `staging_dir`."""
     result = subprocess.run(
         # -u/--public: the CLI defaults to creating datasets *private*, which doesn't match
         # every prior manually-published month (publicly visible, with view/download counts).
-        [kaggle_cmd, "datasets", "create", "-p", str(staging_dir), "-r", "skip", "-u"],
+        [_kaggle_cmd(), "datasets", "create", "-p", str(staging_dir), "-r", "skip", "-u"],
         capture_output=True, text=True,
     )
     logger.info("kaggle datasets create stdout: %s", result.stdout.strip())
