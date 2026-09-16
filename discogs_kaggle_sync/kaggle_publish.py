@@ -159,7 +159,9 @@ def publish_dataset(staging_dir: Path) -> None:
     kaggle_cmd = str(kaggle_bin) if kaggle_bin.exists() else "kaggle"
 
     result = subprocess.run(
-        [kaggle_cmd, "datasets", "create", "-p", str(staging_dir), "-r", "skip"],
+        # -u/--public: the CLI defaults to creating datasets *private*, which doesn't match
+        # every prior manually-published month (publicly visible, with view/download counts).
+        [kaggle_cmd, "datasets", "create", "-p", str(staging_dir), "-r", "skip", "-u"],
         capture_output=True, text=True,
     )
     logger.info("kaggle datasets create stdout: %s", result.stdout.strip())
