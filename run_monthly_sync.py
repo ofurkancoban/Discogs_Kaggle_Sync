@@ -84,13 +84,16 @@ def main() -> int:
             # Free disk immediately: the compressed dump isn't needed once its CSV exists.
             gz_path.unlink(missing_ok=True)
 
-        cover_path = staging_dir / "cover.png"
+        # Must be named exactly "dataset-cover-image.<ext>" — the kaggle CLI auto-detects
+        # this specific filename as a sibling of dataset-metadata.json and uploads it as
+        # the dataset's actual cover image (not just a regular file in the listing).
+        cover_path = staging_dir / "dataset-cover-image.png"
         if not cover_path.exists():
             logger.info("Generating cover image for %s...", month)
             cover_art.generate_cover_image(month, cover_path)
 
         logger.info("Building Kaggle dataset metadata...")
-        kaggle_publish.build_dataset_metadata(staging_dir, args.kaggle_owner, month, csv_files, cover_image_path=cover_path)
+        kaggle_publish.build_dataset_metadata(staging_dir, args.kaggle_owner, month, csv_files)
 
         logger.info("Publishing to Kaggle...")
         kaggle_publish.publish_dataset(staging_dir)

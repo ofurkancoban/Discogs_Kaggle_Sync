@@ -95,7 +95,6 @@ def build_dataset_metadata(
     owner_slug: str,
     month: str,  # "YYYY-MM"
     csv_files: dict[str, Path],  # content_type -> csv path, all inside staging_dir
-    cover_image_path: Path | None = None,  # optional, e.g. staging_dir / "cover.png"
 ) -> Path:
     """Writes dataset-metadata.json into staging_dir and returns its path."""
     year, month_num = month.split("-")
@@ -129,11 +128,11 @@ def build_dataset_metadata(
             "schema": {"fields": fields},
         })
 
-    if cover_image_path is not None and cover_image_path.exists():
-        resources.append({
-            "path": cover_image_path.name,
-            "description": f"Cover image for the {month_label} dataset.",
-        })
+    # No resources entry for the cover image: a file named exactly
+    # "dataset-cover-image.<ext>" is auto-detected by the kaggle CLI and uploaded through
+    # a separate cover-image code path, not as a regular data resource (see
+    # DATASET_COVER_IMAGE_FILES in kaggle_api_extended.py) — listing it here too would
+    # describe a "resource" that was never actually uploaded as one.
 
     metadata = {
         "title": f"Discogs Data Dumps ({month_label})",
