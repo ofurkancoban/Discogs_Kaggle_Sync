@@ -92,6 +92,10 @@ def check_session(session: dict[str, str] | None = None) -> tuple[bool, str]:
         user = client._post("users.UsersService/GetCurrentUser", {})
     except KaggleWebSessionError as e:
         return False, str(e)
+    except requests.RequestException as e:
+        # A malformed or half-expired cookie jar comes back as 400 rather than 401, and a
+        # network hiccup should not look different here: either way the session is unusable.
+        return False, f"Could not confirm the Kaggle session: {e}"
 
     name = user.get("displayName") or user.get("userName")
     if not name:
