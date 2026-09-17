@@ -215,31 +215,103 @@ def publish_dataset(staging_dir: Path) -> None:
 METADATA_UPDATE_MAX_RETRIES = 8
 METADATA_UPDATE_RETRY_DELAY_SECONDS = 60
 
+def _patched_upload_dataset_image_file(self, metadata_file_path, relative_image_file_path, quiet=False):
+    """Replaces KaggleApi._upload_dataset_image_file, which hardcodes the header/thumbnail
+    crop rectangles to a fixed top-left 560x280 / 280x280 region of whatever image is
+    uploaded — completely independent of that image's actual size or content. Our cover
+    image is a 1792x902 wide banner with its year/month text centered around y=480-810, so
+    that hardcoded crop always landed on the plain background photo instead. This computes
+    crops from the real image dimensions instead: the header as a near-full-image 2:1 slice
+    (matches our banner's own aspect ratio almost exactly) and the thumbnail as a centered
+    square, both of which include the actual branding/text.
+    """
+    import mimetypes
+    import os
+    from kaggle.api.kaggle_api_extended import ResumableUploadContext
+    from kagglesdk.blobs.types.blob_api_service import ApiBlobType
+    from kagglesdk.common.types.cropped_image_upload import CroppedImageRectangle, CroppedImageUpload
+    from PIL import Image
+
+    image_full_path = os.path.join(metadata_file_path, relative_image_file_path)
+    with Image.open(image_full_path) as im:
+        img_w, img_h = im.size
+
+    header_h = min(img_h, img_w // 2)
+    header_w = header_h * 2
+
+    thumb_size = min(img_w, img_h)
+    thumb_left = (img_w - thumb_size) // 2
+    thumb_top = (img_h - thumb_size) // 2
+
+    file_name = os.path.basename(image_full_path)
+    content_type, _ = mimetypes.guess_type(file_name)
+    with ResumableUploadContext() as upload_context:
+        upload_file = self._upload_file(
+            file_name, image_full_path, ApiBlobType.INBOX, upload_context, quiet,
+            resources=None, content_type=content_type,
+        )
+        if not upload_file:
+            raise ValueError("Error uploading image file: %s" % image_full_path)
+
+        header_image_rect = CroppedImageRectangle()
+        header_image_rect.title = "cover image"
+        header_image_rect.top = 0
+        header_image_rect.left = 0
+        header_image_rect.width = header_w
+        header_image_rect.height = header_h
+
+        thumbnail_rect = CroppedImageRectangle()
+        thumbnail_rect.title = "thumbnail"
+        thumbnail_rect.top = thumb_top
+        thumbnail_rect.left = thumb_left
+        thumbnail_rect.width = thumb_size
+        thumbnail_rect.height = thumb_size
+
+        cropped_image_upload = CroppedImageUpload()
+        cropped_image_upload.token = upload_file.token
+        cropped_image_upload.crop_rectangles = [header_image_rect, thumbnail_rect]
+        return cropped_image_upload
+
 
 def update_dataset_settings(owner_slug: str, dataset_slug: str, staging_dir: Path) -> None:
     """Pushes the fields `datasets create` doesn't apply — userSpecifiedSources
-    (Provenance/Sources) and expectedUpdateFrequency — by re-reading the same
-    dataset-metadata.json against the now-existing dataset. Must run after
-    publish_dataset(); the ref has to already exist for this call to succeed.
+    (Provenance/Sources), expectedUpdateFrequency, and a correctly-cropped cover
+    image/thumbnail — by re-reading the same dataset-metadata.json against the
+    now-existing dataset. Must run after publish_dataset(); the ref has to already
+    exist for this call to succeed.
+
+    Uses the kaggle Python API directly (not the `kaggle` CLI subprocess) so the
+    cover image crop rectangles can be patched to match our actual image layout
+    instead of the CLI's hardcoded top-left crop (see _patched_upload_dataset_image_file).
 
     Kaggle finishes creating a large dataset (the releases CSV alone can be 30GB)
     asynchronously after `datasets create` returns, and this call gets a transient
     403 Forbidden if it runs before that processing completes — so retry with a
     delay instead of treating the first failure as fatal.
     """
+    import types
+    from kaggle.api.kaggle_api_extended import KaggleApi
+
     ref = f"{owner_slug}/{dataset_slug}"
+    api = KaggleApi()
+    api.authenticate()
+    api._upload_dataset_image_file = types.MethodType(_patched_upload_dataset_image_file, api)
+
+    last_error: BaseException | None = None
     for attempt in range(1, METADATA_UPDATE_MAX_RETRIES + 1):
-        result = subprocess.run(
-            [_kaggle_cmd(), "datasets", "metadata", ref, "--update", "-p", str(staging_dir)],
-            capture_output=True, text=True,
-        )
-        logger.info("kaggle datasets metadata --update stdout: %s", result.stdout.strip())
-        if result.returncode == 0:
+        try:
+            api.dataset_metadata_update(ref, str(staging_dir))
             return
-        logger.warning(
-            "kaggle datasets metadata --update stderr (attempt %d/%d): %s",
-            attempt, METADATA_UPDATE_MAX_RETRIES, result.stderr.strip(),
-        )
-        if attempt < METADATA_UPDATE_MAX_RETRIES:
-            time.sleep(METADATA_UPDATE_RETRY_DELAY_SECONDS)
-    raise RuntimeError(f"Kaggle metadata update failed for {ref} after {METADATA_UPDATE_MAX_RETRIES} attempts")
+        except KeyboardInterrupt:
+            raise
+        except BaseException as e:  # noqa: BLE001 - dataset_metadata_update calls exit(1) on
+            # API-level errors (raising SystemExit, not Exception), so this must be broad to
+            # actually retry instead of crashing the whole sync process on the first failure.
+            last_error = e
+            logger.warning(
+                "dataset_metadata_update failed (attempt %d/%d): %s",
+                attempt, METADATA_UPDATE_MAX_RETRIES, e,
+            )
+            if attempt < METADATA_UPDATE_MAX_RETRIES:
+                time.sleep(METADATA_UPDATE_RETRY_DELAY_SECONDS)
+    raise RuntimeError(f"Kaggle metadata update failed for {ref} after {METADATA_UPDATE_MAX_RETRIES} attempts") from last_error
