@@ -44,7 +44,18 @@ def main() -> int:
              "use this deliberately while iterating on one month — it permanently drops that "
              "dataset's view/download/vote history. Never combine with an unattended cron run.",
     )
+    parser.add_argument(
+        "--only-types", type=str, default=None,
+        help="Debug only: comma-separated subset of artists,labels,masters,releases to "
+             "process (e.g. 'labels'). Publishes a real dataset missing the other files — "
+             "for exercising the automated publish mechanism cheaply, never for a real month.",
+    )
     args = parser.parse_args()
+
+    content_types = CONTENT_TYPES
+    if args.only_types:
+        content_types = tuple(t.strip() for t in args.only_types.split(","))
+        logger.warning("--only-types set: restricting this run to %s (debug mode)", content_types)
 
     logger.info("Checking for the latest Discogs dump month...")
     month, files = scraper.latest_month_files()
@@ -55,8 +66,8 @@ def main() -> int:
         logger.info("%s already published to Kaggle. Nothing to do.", month)
         return 0
 
-    by_type = {f.content_type: f for f in files if f.content_type in CONTENT_TYPES}
-    missing = [t for t in CONTENT_TYPES if t not in by_type]
+    by_type = {f.content_type: f for f in files if f.content_type in content_types}
+    missing = [t for t in content_types if t not in by_type]
     if missing:
         logger.error("Missing expected file type(s) for %s: %s", month, missing)
         return 1
@@ -125,7 +136,10 @@ def main() -> int:
         dataset_slug = kaggle_publish.dataset_slug_for(month)
         kaggle_publish.update_dataset_settings(args.kaggle_owner, dataset_slug, staging_dir)
 
-        state.mark_published(month)
+        if content_types == CONTENT_TYPES:
+            state.mark_published(month)
+        else:
+            logger.warning("--only-types set: not marking %s as published (this was a partial debug run).", month)
         logger.info("Done: %s published to Kaggle.", month)
     except Exception:
         logger.exception(

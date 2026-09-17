@@ -161,7 +161,7 @@ def build_dataset_metadata(
         "id": f"{owner_slug}/{dataset_slug}",
         "subtitle": _subtitle(month_label),
         "licenses": [{"name": "CC0-1.0"}],
-        "keywords": ["music"],
+        "keywords": ["music", "software", "beginner", "tabular"],
         "description": _about_dataset(month_label),
         "isPrivate": False,
         "userSpecifiedSources": _provenance_sources(month_label),
