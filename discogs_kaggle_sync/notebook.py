@@ -100,17 +100,27 @@ def build_notebook(
         ),
         _code(
             "def load_sample(content_type, nrows=SAMPLE_ROWS, **kwargs):\n"
-            '    """Reads the first `nrows` rows of one of the four dump files."""\n'
+            '    """Reads the first `nrows` rows of one of the dump files, or None if absent.\n'
+            "\n"
+            "    A month's dataset is published one file at a time, so a file can legitimately\n"
+            "    be missing while the upload is still in progress. Returning None keeps the rest\n"
+            "    of the notebook runnable instead of failing the whole kernel.\n"
+            '    """\n'
             "    path = os.path.join(DATA_DIR, FILES[content_type])\n"
+            "    if not os.path.exists(path):\n"
+            '        print(f"{content_type}: not present in this dataset yet, skipping")\n'
+            "        return None\n"
             "    return pd.read_csv(path, nrows=nrows, low_memory=False, **kwargs)\n"
             "\n"
             "\n"
             'labels = load_sample("labels")\n'
-            "print(labels.shape)\n"
-            "labels.head()\n"
+            "if labels is not None:\n"
+            "    print(labels.shape)\n"
+            "    display(labels.head())\n"
         ),
         _code(
-            "labels.info()\n"
+            "if labels is not None:\n"
+            "    labels.info()\n"
         ),
         _markdown(
             "## Unpacking the JSON-encoded columns\n"
@@ -131,11 +141,12 @@ def build_notebook(
             "    return parsed if isinstance(parsed, list) else [parsed]\n"
             "\n"
             "\n"
-            'sublabels = labels["label_sublabels_label"].map(parse_json_cell)\n'
-            'labels_with_counts = labels.assign(sublabel_count=sublabels.str.len())\n'
-            'labels_with_counts.nlargest(10, "sublabel_count")[\n'
-            '    ["labels_label_name", "sublabel_count"]\n'
-            "]\n"
+            "if labels is not None:\n"
+            '    sublabels = labels["label_sublabels_label"].map(parse_json_cell)\n'
+            "    labels_with_counts = labels.assign(sublabel_count=sublabels.str.len())\n"
+            '    display(labels_with_counts.nlargest(10, "sublabel_count")[\n'
+            '        ["labels_label_name", "sublabel_count"]\n'
+            "    ])\n"
         ),
         _markdown(
             "## Releases: formats, countries and years\n"
@@ -145,23 +156,27 @@ def build_notebook(
         ),
         _code(
             'releases = load_sample("releases")\n'
-            "print(releases.shape)\n"
-            'releases[["releases_release_title", "releases_release_country",\n'
-            '          "releases_release_released", "release_formats_format_name"]].head(10)\n'
+            "if releases is not None:\n"
+            "    print(releases.shape)\n"
+            '    display(releases[["releases_release_title", "releases_release_country",\n'
+            '                      "releases_release_released", "release_formats_format_name"]].head(10))\n'
         ),
         _code(
-            'top_countries = releases["releases_release_country"].value_counts().head(15)\n'
-            "top_countries.plot(kind=\"barh\", figsize=(8, 6), title=\"Releases by country (sample)\").invert_yaxis()\n"
+            "if releases is not None:\n"
+            '    top_countries = releases["releases_release_country"].value_counts().head(15)\n'
+            '    top_countries.plot(kind="barh", figsize=(8, 6),\n'
+            '                       title="Releases by country (sample)").invert_yaxis()\n'
         ),
         _code(
             "# `released` is free-form (full date, year-month, or just a year), so pull the year out.\n"
-            'years = pd.to_numeric(\n'
-            '    releases["releases_release_released"].astype(str).str.slice(0, 4), errors="coerce"\n'
-            ")\n"
-            "years = years[(years >= 1900) & (years <= 2030)]\n"
-            'years.value_counts().sort_index().plot(\n'
-            '    figsize=(10, 4), title="Releases per year (sample)"\n'
-            ")\n"
+            "if releases is not None:\n"
+            "    years = pd.to_numeric(\n"
+            '        releases["releases_release_released"].astype(str).str.slice(0, 4), errors="coerce"\n'
+            "    )\n"
+            "    years = years[(years >= 1900) & (years <= 2030)]\n"
+            "    years.value_counts().sort_index().plot(\n"
+            '        figsize=(10, 4), title="Releases per year (sample)"\n'
+            "    )\n"
         ),
         _markdown(
             "## Masters and artists\n"
@@ -174,10 +189,14 @@ def build_notebook(
             'masters = load_sample("masters")\n'
             'artists = load_sample("artists")\n'
             "\n"
-            'print("masters:", masters.shape)\n'
-            'print("artists:", artists.shape)\n'
-            "\n"
-            'masters["master_genres_genre"].map(parse_json_cell).explode().value_counts().head(15)\n'
+            "if masters is not None:\n"
+            '    print("masters:", masters.shape)\n'
+            "    display(\n"
+            '        masters["master_genres_genre"].map(parse_json_cell).explode().value_counts().head(15)\n'
+            "    )\n"
+            "if artists is not None:\n"
+            '    print("artists:", artists.shape)\n'
+            '    display(artists.head())\n'
         ),
         _markdown(
             "## Where to go next\n"

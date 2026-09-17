@@ -136,17 +136,15 @@ def main() -> int:
         dataset_slug = kaggle_publish.dataset_slug_for(month)
         kaggle_publish.update_dataset_settings(args.kaggle_owner, dataset_slug, staging_dir)
 
-        if content_types == CONTENT_TYPES:
-            # The starter notebook reads all four files by name, so it would fail to run if
-            # this was a partial --only-types run. Skip it rather than publish a broken one.
-            logger.info("Publishing companion starter notebook...")
-            notebook_dir = work_dir / "notebook"
-            notebook.write_notebook(
-                notebook_dir, args.kaggle_owner, dataset_slug, month,
-                {ctype: path.name for ctype, path in csv_files.items()},
-            )
-            notebook.push_notebook(notebook_dir)
+        logger.info("Publishing companion starter notebook...")
+        notebook_dir = work_dir / "notebook"
+        notebook.write_notebook(
+            notebook_dir, args.kaggle_owner, dataset_slug, month,
+            {ctype: path.name for ctype, path in csv_files.items()},
+        )
+        notebook.push_notebook(notebook_dir)
 
+        if content_types == CONTENT_TYPES:
             state.mark_published(month)
         else:
             logger.warning("--only-types set: not marking %s as published (this was a partial debug run).", month)
