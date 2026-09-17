@@ -19,8 +19,11 @@ Two consequences worth knowing before relying on it:
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -55,6 +58,91 @@ def load_session(path: Path = DEFAULT_SESSION_PATH) -> dict[str, str]:
     if missing:
         raise KaggleWebSessionError(f"{path} is missing: {', '.join(missing)}")
     return session
+
+
+def session_expiry(session: dict[str, str] | None = None) -> datetime | None:
+    """Returns when the session's client token stops being valid, if it can be read.
+
+    The token is an unsigned JWT sitting in the cookie jar; only its expiry is read here,
+    to warn before a monthly run silently loses the ability to write descriptions.
+    """
+    session = session or load_session()
+    jar = dict(
+        part.strip().split("=", 1)
+        for part in session["cookie"].split(";")
+        if "=" in part
+    )
+    token = jar.get("CLIENT-TOKEN")
+    if not token or token.count(".") < 2:
+        return None
+    payload = token.split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        return datetime.fromisoformat(claims["exp"].replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def check_session(session: dict[str, str] | None = None) -> tuple[bool, str]:
+    """Confirms the exported session still authenticates, before relying on it."""
+    session = session or load_session()
+    client = KaggleWebClient(session)
+    try:
+        user = client._post("users.UsersService/GetCurrentUser", {})
+    except KaggleWebSessionError as e:
+        return False, str(e)
+
+    name = user.get("displayName") or user.get("userName")
+    if not name:
+        return False, "Kaggle answered but did not recognise the session as signed in."
+
+    expiry = session_expiry(session)
+    if expiry:
+        days = (expiry - datetime.now(timezone.utc)).days
+        return True, f"Signed in as {name}; session valid for about {days} more day(s)."
+    return True, f"Signed in as {name}."
+
+
+def save_session_from_curl(curl_text: str, path: Path = DEFAULT_SESSION_PATH) -> Path:
+    """Builds the session file out of a 'Copy as cURL' command from the browser.
+
+    Kaggle does not refresh these cookies on the requests this module makes (no
+    Set-Cookie comes back), and the client token is minted for 30 days, so the session
+    has to be re-exported by hand every so often. Parsing the browser's own clipboard
+    format keeps that chore to a paste instead of hand-editing JSON.
+    """
+    cookie = None
+    xsrf = None
+
+    # Both `-b '<cookies>'` and `-H 'cookie: <cookies>'` appear depending on the browser.
+    for pattern, setter in (
+        (r"-b\s+'([^']*)'", "cookie"),
+        (r"-H\s+'cookie:\s*([^']*)'", "cookie"),
+        (r"-H\s+'x-xsrf-token:\s*([^']*)'", "xsrf"),
+    ):
+        match = re.search(pattern, curl_text, re.IGNORECASE)
+        if match:
+            if setter == "cookie" and not cookie:
+                cookie = match.group(1).strip()
+            elif setter == "xsrf":
+                xsrf = match.group(1).strip()
+
+    if not cookie or not xsrf:
+        missing = []
+        if not cookie:
+            missing.append("the Cookie header")
+        if not xsrf:
+            missing.append("the x-xsrf-token header")
+        raise KaggleWebSessionError(
+            "Could not read " + " or ".join(missing) + " out of that cURL command. Copy it "
+            "from a request to kaggle.com/api/i/... in a logged-in tab."
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"cookie": cookie, "xsrfToken": xsrf}, indent=2), encoding="utf-8")
+    path.chmod(0o600)
+    return path
 
 
 class KaggleWebClient:
