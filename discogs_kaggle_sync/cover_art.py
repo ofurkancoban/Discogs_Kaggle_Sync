@@ -29,11 +29,15 @@ SHADOW_DISTANCE = 3
 SHADOW_BLUR_RADIUS = 12
 SHADOW_OPACITY = 0.85
 
-# Matches the layout constants in CoverArtRenderer.swift's render().
-LINE_SPACING = 15
-Y_OFFSET = 150
-YEAR_VERTICAL_NUDGE = 45   # pushes the year down toward the month
-MONTH_VERTICAL_NUDGE = -20  # pulls the month up toward the year
+# Unlike CoverArtRenderer.swift's plain vinyl base image, this project's base image
+# (assets/cover_art.png) already has "Discogs" + "Dataset Project" baked in, occupying
+# roughly y=60-475, with a designated empty band from y=480-810 for the year/month text
+# before the social-icons row starts at y=815. These values center the year/month block
+# in that empty band instead of reusing the Swift app's tuning, which doesn't apply here.
+LINE_SPACING = 30
+Y_OFFSET = 194
+YEAR_VERTICAL_NUDGE = 0
+MONTH_VERTICAL_NUDGE = 0
 
 
 def _draw_text_with_drop_shadow(image: Image.Image, text: str, position: tuple[float, float], font) -> None:
