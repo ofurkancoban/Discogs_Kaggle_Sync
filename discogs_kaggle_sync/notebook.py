@@ -76,20 +76,42 @@ def build_notebook(
             "JSON-encoded lists inside a single cell, so a few columns need `json.loads` to unpack.\n"
         ),
         _code(
+            "import glob\n"
             "import json\n"
             "import os\n"
             "\n"
             "import pandas as pd\n"
             "\n"
-            f'DATA_DIR = "{data_dir}"\n'
+            f'EXPECTED_DATA_DIR = "{data_dir}"\n'
             f"FILES = {files_literal}\n"
             "\n"
             "# These files are large (releases.csv is tens of GB), so every read below is capped.\n"
             f"SAMPLE_ROWS = {SAMPLE_ROWS}\n"
             "\n"
-            "for name in sorted(os.listdir(DATA_DIR)):\n"
-            "    size_gb = os.path.getsize(os.path.join(DATA_DIR, name)) / 1e9\n"
-            '    print(f"{name:<45} {size_gb:>8.2f} GB")\n'
+            "\n"
+            "def resolve_data_dir(preferred):\n"
+            '    """Finds the mounted dataset directory.\n'
+            "\n"
+            "    Kaggle normally mounts an attached dataset at /kaggle/input/<slug>, but the mount\n"
+            "    can be missing or named differently while a new version is still processing, so\n"
+            "    fall back to whatever is actually present under /kaggle/input.\n"
+            '    """\n'
+            "    if os.path.isdir(preferred):\n"
+            "        return preferred\n"
+            f'    mounted = sorted(p for p in glob.glob("{KAGGLE_INPUT_ROOT}/*") if os.path.isdir(p))\n'
+            "    if mounted:\n"
+            '        print(f"Expected {preferred!r}; using {mounted[0]!r} instead.")\n'
+            "        return mounted[0]\n"
+            f'    print("No dataset is mounted under {KAGGLE_INPUT_ROOT} yet.")\n'
+            "    return preferred\n"
+            "\n"
+            "\n"
+            "DATA_DIR = resolve_data_dir(EXPECTED_DATA_DIR)\n"
+            "\n"
+            "if os.path.isdir(DATA_DIR):\n"
+            "    for name in sorted(os.listdir(DATA_DIR)):\n"
+            "        size_gb = os.path.getsize(os.path.join(DATA_DIR, name)) / 1e9\n"
+            '        print(f"{name:<45} {size_gb:>8.2f} GB")\n'
         ),
         _markdown(
             "## Loading a sample\n"
