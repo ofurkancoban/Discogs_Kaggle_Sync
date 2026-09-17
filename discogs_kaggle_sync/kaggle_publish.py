@@ -164,7 +164,7 @@ def build_dataset_metadata(
         "description": _about_dataset(month_label),
         "isPrivate": False,
         "userSpecifiedSources": _provenance_sources(month_label),
-        "expectedUpdateFrequency": "Monthly",
+        "expectedUpdateFrequency": "monthly",
         "resources": resources,
     }
 
