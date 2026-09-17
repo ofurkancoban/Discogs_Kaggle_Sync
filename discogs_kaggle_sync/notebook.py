@@ -209,7 +209,9 @@ def build_kernel_metadata(owner_slug: str, dataset_slug: str, month: str, notebo
     month_label = f"{month_name[int(month_num)]} {year}"
     return {
         "id": f"{owner_slug}/{kernel_slug_for(dataset_slug)}",
-        "title": f"Discogs Data Dumps ({month_label}) - Getting Started",
+        # Kaggle rejects the push unless the title slugifies to exactly the id above, so
+        # this has to stay word-for-word in step with kernel_slug_for().
+        "title": f"Discogs Data Dumps ({month_label}) Starter",
         "code_file": notebook_filename,
         "language": "python",
         "kernel_type": "notebook",
