@@ -25,6 +25,7 @@ import json
 import logging
 import sys
 import subprocess
+import time
 from calendar import month_name
 from pathlib import Path
 
@@ -211,17 +212,34 @@ def publish_dataset(staging_dir: Path) -> None:
         raise RuntimeError(f"Kaggle publish failed (exit {result.returncode})")
 
 
+METADATA_UPDATE_MAX_RETRIES = 8
+METADATA_UPDATE_RETRY_DELAY_SECONDS = 60
+
+
 def update_dataset_settings(owner_slug: str, dataset_slug: str, staging_dir: Path) -> None:
     """Pushes the fields `datasets create` doesn't apply — userSpecifiedSources
     (Provenance/Sources) and expectedUpdateFrequency — by re-reading the same
     dataset-metadata.json against the now-existing dataset. Must run after
-    publish_dataset(); the ref has to already exist for this call to succeed."""
+    publish_dataset(); the ref has to already exist for this call to succeed.
+
+    Kaggle finishes creating a large dataset (the releases CSV alone can be 30GB)
+    asynchronously after `datasets create` returns, and this call gets a transient
+    403 Forbidden if it runs before that processing completes — so retry with a
+    delay instead of treating the first failure as fatal.
+    """
     ref = f"{owner_slug}/{dataset_slug}"
-    result = subprocess.run(
-        [_kaggle_cmd(), "datasets", "metadata", ref, "--update", "-p", str(staging_dir)],
-        capture_output=True, text=True,
-    )
-    logger.info("kaggle datasets metadata --update stdout: %s", result.stdout.strip())
-    if result.returncode != 0:
-        logger.error("kaggle datasets metadata --update stderr: %s", result.stderr.strip())
-        raise RuntimeError(f"Kaggle metadata update failed for {ref} (exit {result.returncode})")
+    for attempt in range(1, METADATA_UPDATE_MAX_RETRIES + 1):
+        result = subprocess.run(
+            [_kaggle_cmd(), "datasets", "metadata", ref, "--update", "-p", str(staging_dir)],
+            capture_output=True, text=True,
+        )
+        logger.info("kaggle datasets metadata --update stdout: %s", result.stdout.strip())
+        if result.returncode == 0:
+            return
+        logger.warning(
+            "kaggle datasets metadata --update stderr (attempt %d/%d): %s",
+            attempt, METADATA_UPDATE_MAX_RETRIES, result.stderr.strip(),
+        )
+        if attempt < METADATA_UPDATE_MAX_RETRIES:
+            time.sleep(METADATA_UPDATE_RETRY_DELAY_SECONDS)
+    raise RuntimeError(f"Kaggle metadata update failed for {ref} after {METADATA_UPDATE_MAX_RETRIES} attempts")
