@@ -3,7 +3,7 @@
 
 Checks for a new dump month, downloads its 4 files, converts each to CSV, publishes a
 new Kaggle dataset for the month, then cleans up local disk. Safe to run repeatedly
-(via cron) — already-published months are skipped using state/published_months.json.
+(via cron) - already-published months are skipped using state/published_months.json.
 
 Usage:
     python run_monthly_sync.py [--work-dir /path/to/scratch] [--kaggle-owner USERNAME]
@@ -16,7 +16,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from discogs_kaggle_sync import converter, cover_art, downloader, kaggle_publish, scraper, state
+from discogs_kaggle_sync import converter, cover_art, downloader, kaggle_publish, notebook, scraper, state
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,13 +41,13 @@ def main() -> int:
     parser.add_argument(
         "--replace-existing", action="store_true",
         help="Delete the month's existing Kaggle dataset (if any) before publishing. Only "
-             "use this deliberately while iterating on one month — it permanently drops that "
+             "use this deliberately while iterating on one month - it permanently drops that "
              "dataset's view/download/vote history. Never combine with an unattended cron run.",
     )
     parser.add_argument(
         "--only-types", type=str, default=None,
         help="Debug only: comma-separated subset of artists,labels,masters,releases to "
-             "process (e.g. 'labels'). Publishes a real dataset missing the other files — "
+             "process (e.g. 'labels'). Publishes a real dataset missing the other files - "
              "for exercising the automated publish mechanism cheaply, never for a real month.",
     )
     args = parser.parse_args()
@@ -84,7 +84,7 @@ def main() -> int:
             csv_path = staging_dir / csv_name
 
             if csv_path.exists():
-                # Resuming after a failure past this point (e.g. the publish step) — the
+                # Resuming after a failure past this point (e.g. the publish step) - the
                 # CSV conversion is the expensive part (hours for releases), so a retry
                 # must not redo it just because a later step failed.
                 logger.info("%s already converted, reusing %s", dump.filename, csv_path.name)
@@ -107,7 +107,7 @@ def main() -> int:
             # Free disk immediately: the compressed dump isn't needed once its CSV exists.
             gz_path.unlink(missing_ok=True)
 
-        # Must be named exactly "dataset-cover-image.<ext>" — the kaggle CLI auto-detects
+        # Must be named exactly "dataset-cover-image.<ext>" - the kaggle CLI auto-detects
         # this specific filename as a sibling of dataset-metadata.json and uploads it as
         # the dataset's actual cover image (not just a regular file in the listing).
         # Regenerated every run (unlike the CSVs) so a --keep-staging iteration loop that's
@@ -131,12 +131,22 @@ def main() -> int:
         kaggle_publish.publish_dataset(staging_dir)
 
         # `create` doesn't apply userSpecifiedSources (Provenance) or expectedUpdateFrequency
-        # — a second call against the now-existing dataset is required for those.
+        # - a second call against the now-existing dataset is required for those.
         logger.info("Updating provenance/update-frequency settings...")
         dataset_slug = kaggle_publish.dataset_slug_for(month)
         kaggle_publish.update_dataset_settings(args.kaggle_owner, dataset_slug, staging_dir)
 
         if content_types == CONTENT_TYPES:
+            # The starter notebook reads all four files by name, so it would fail to run if
+            # this was a partial --only-types run. Skip it rather than publish a broken one.
+            logger.info("Publishing companion starter notebook...")
+            notebook_dir = work_dir / "notebook"
+            notebook.write_notebook(
+                notebook_dir, args.kaggle_owner, dataset_slug, month,
+                {ctype: path.name for ctype, path in csv_files.items()},
+            )
+            notebook.push_notebook(notebook_dir)
+
             state.mark_published(month)
         else:
             logger.warning("--only-types set: not marking %s as published (this was a partial debug run).", month)
@@ -149,7 +159,7 @@ def main() -> int:
         )
         return 1
     else:
-        # Only reclaim disk on success — these are multi-GB working sets, but the whole
+        # Only reclaim disk on success - these are multi-GB working sets, but the whole
         # point of keeping them on failure (or with --keep-staging) is so a retry is cheap.
         if not args.keep_staging:
             shutil.rmtree(work_dir, ignore_errors=True)

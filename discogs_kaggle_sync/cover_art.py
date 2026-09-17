@@ -2,7 +2,7 @@
 
 Matches the final, user-tuned drop-shadow text-on-image logic from DiscogsGUI's native
 Swift Cover Art tool (CoverArtRenderer.swift) rather than the original Python main.py
-values — line spacing and the year/month vertical nudges were adjusted repeatedly there
+values - line spacing and the year/month vertical nudges were adjusted repeatedly there
 based on visual feedback, and the shadow was simplified (no spread/dilation, just
 angle/distance/blur/opacity) after the spread-based mask approach produced a misplaced,
 wrongly-colored shadow. This mirrors that final version so both projects render the same look.
@@ -50,7 +50,7 @@ def _draw_text_with_drop_shadow(image: Image.Image, text: str, position: tuple[f
     text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
     # PIL's draw.text((x, y), ...) positions the pen origin, not the tight ink bounding
-    # box — bbox[0]/bbox[1] (left/top bearing) can be non-zero and differs per string
+    # box - bbox[0]/bbox[1] (left/top bearing) can be non-zero and differs per string
     # (e.g. "2026" vs "SEPTEMBER"), so drawing directly at (base_x, base_y) without this
     # correction silently misaligns strings that were centered using their tight bbox
     # widths (as generate_cover_image does). This is exactly what caused the year/month
@@ -58,7 +58,7 @@ def _draw_text_with_drop_shadow(image: Image.Image, text: str, position: tuple[f
     pen_x = base_x - bbox[0]
     pen_y = base_y - bbox[1]
 
-    # No spread/dilation step (dropped in the Swift version — it relied on Core Image's
+    # No spread/dilation step (dropped in the Swift version - it relied on Core Image's
     # CIMorphologyMaximum, which isn't needed here and complicated the mask for no visual
     # benefit at these text sizes). Just render the glyph shape and blur it.
     mask = Image.new("L", (text_width, text_height), 0)
@@ -69,7 +69,7 @@ def _draw_text_with_drop_shadow(image: Image.Image, text: str, position: tuple[f
     shadow.putalpha(mask.point(lambda a: int(a * SHADOW_OPACITY)))
     # The mask's (0, 0) corresponds to the tight-bbox top-left, which is exactly
     # (base_x, base_y) by construction above, so the shadow offset doesn't need the
-    # bbox correction — only the real glyph draw below (via draw.text's pen semantics) does.
+    # bbox correction - only the real glyph draw below (via draw.text's pen semantics) does.
     image.alpha_composite(shadow, dest=(base_x + dx, base_y + dy))
 
     ImageDraw.Draw(image).text((pen_x, pen_y), text, font=font, fill=(255, 255, 255, 255))

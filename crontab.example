@@ -4,7 +4,7 @@
 # state/published_months.json and exits in seconds if the current month is already
 # published, so a daily run costs almost nothing on the days there's nothing to do. That
 # removes the guesswork of picking a fixed "day of month" for when Discogs will have
-# published — whenever it lands, this catches it within 24 hours instead of waiting for
+# published - whenever it lands, this catches it within 24 hours instead of waiting for
 # next month if a fixed day is missed.
 #
 # Install with: crontab -e   (then paste the line below, adjusting paths)

@@ -4,7 +4,7 @@ those chunks to a single CSV via a two-pass (discover columns, then write rows) 
 Ported from DiscogsGUI's main.py (chunk_xml_by_type / update_columns_from_chunk /
 write_chunk_to_csv / convert_chunked_files_to_csv), with one deliberate change: chunking
 reads directly from the gzip stream instead of a fully-decompressed .xml file on disk.
-Discogs' releases dump is ~10GB compressed and unpacks to tens of GB — never materializing
+Discogs' releases dump is ~10GB compressed and unpacks to tens of GB - never materializing
 that full decompressed copy roughly halves peak disk usage, which matters a lot on a VPS
 with finite disk.
 """

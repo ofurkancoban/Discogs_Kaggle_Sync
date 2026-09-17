@@ -9,11 +9,11 @@ these datasets, with the month/year and file format made dynamic.
 
 Two separate CLI calls are needed to fully populate a dataset's "Pending Actions" list:
 
-1. `kaggle datasets create` — reads title/id/licenses/subtitle/description/keywords/
+1. `kaggle datasets create` - reads title/id/licenses/subtitle/description/keywords/
    resources(schema) from dataset-metadata.json, plus auto-detects a sibling
    "dataset-cover-image.<ext>" file (see cover_art.py). Confirmed by reading
    `dataset_create_new()` in kaggle_api_extended.py.
-2. `kaggle datasets metadata <ref> --update -p <folder>` — reads the *same* metadata
+2. `kaggle datasets metadata <ref> --update -p <folder>` - reads the *same* metadata
    file's `userSpecifiedSources` (-> the "Provenance / Sources" section) and
    `expectedUpdateFrequency`, which `create` does not apply. Confirmed by reading
    `dataset_metadata_update()` in the same file.
@@ -87,7 +87,7 @@ def _about_dataset(month_label: str) -> str:
 
 
 def _subtitle(month_label: str) -> str:
-    # Must be 20-80 characters (enforced by the API) — keep this in sync if the wording
+    # Must be 20-80 characters (enforced by the API) - keep this in sync if the wording
     # changes, since a subtitle outside that range makes `datasets create` raise.
     text = f"Discogs' full {month_label} music catalog: artists, labels, masters, releases"
     assert 20 <= len(text) <= 80, f"subtitle length {len(text)} out of Kaggle's allowed 20-80 range"
@@ -153,7 +153,7 @@ def build_dataset_metadata(
     # No resources entry for the cover image: a file named exactly
     # "dataset-cover-image.<ext>" is auto-detected by the kaggle CLI and uploaded through
     # a separate cover-image code path, not as a regular data resource (see
-    # DATASET_COVER_IMAGE_FILES in kaggle_api_extended.py) — listing it here too would
+    # DATASET_COVER_IMAGE_FILES in kaggle_api_extended.py) - listing it here too would
     # describe a "resource" that was never actually uploaded as one.
 
     metadata = {
@@ -185,7 +185,7 @@ def _kaggle_cmd() -> str:
 
 def delete_dataset(owner_slug: str, dataset_slug: str) -> None:
     """Permanently deletes an existing dataset. Only call this when the caller has
-    explicit intent to replace it (e.g. a --replace-existing flag) — this cannot be undone
+    explicit intent to replace it (e.g. a --replace-existing flag) - this cannot be undone
     and drops the dataset's view/download/vote history."""
     ref = f"{owner_slug}/{dataset_slug}"
     result = subprocess.run(
@@ -218,7 +218,7 @@ METADATA_UPDATE_RETRY_DELAY_SECONDS = 60
 def _patched_upload_dataset_image_file(self, metadata_file_path, relative_image_file_path, quiet=False):
     """Replaces KaggleApi._upload_dataset_image_file, which hardcodes the header/thumbnail
     crop rectangles to a fixed top-left 560x280 / 280x280 region of whatever image is
-    uploaded — completely independent of that image's actual size or content. Our cover
+    uploaded - completely independent of that image's actual size or content. Our cover
     image is a 1792x902 wide banner with its year/month text centered around y=480-810, so
     that hardcoded crop always landed on the plain background photo instead. This computes
     crops from the real image dimensions instead: the header as a near-full-image 2:1 slice
@@ -274,9 +274,9 @@ def _patched_upload_dataset_image_file(self, metadata_file_path, relative_image_
 
 
 def update_dataset_settings(owner_slug: str, dataset_slug: str, staging_dir: Path) -> None:
-    """Pushes the fields `datasets create` doesn't apply — userSpecifiedSources
+    """Pushes the fields `datasets create` doesn't apply - userSpecifiedSources
     (Provenance/Sources), expectedUpdateFrequency, and a correctly-cropped cover
-    image/thumbnail — by re-reading the same dataset-metadata.json against the
+    image/thumbnail - by re-reading the same dataset-metadata.json against the
     now-existing dataset. Must run after publish_dataset(); the ref has to already
     exist for this call to succeed.
 
@@ -286,7 +286,7 @@ def update_dataset_settings(owner_slug: str, dataset_slug: str, staging_dir: Pat
 
     Kaggle finishes creating a large dataset (the releases CSV alone can be 30GB)
     asynchronously after `datasets create` returns, and this call gets a transient
-    403 Forbidden if it runs before that processing completes — so retry with a
+    403 Forbidden if it runs before that processing completes - so retry with a
     delay instead of treating the first failure as fatal.
     """
     import types

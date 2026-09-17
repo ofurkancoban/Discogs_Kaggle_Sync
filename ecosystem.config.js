@@ -1,6 +1,6 @@
 // Alternative to crontab.example: run the sync under pm2 instead of plain cron.
 //
-// pm2 can schedule any executable via `cron_restart`, not just Node processes — this
+// pm2 can schedule any executable via `cron_restart`, not just Node processes - this
 // runs run_monthly_sync.py once a day and relies on the same idempotency check (it exits
 // immediately on days there's nothing new). Useful if the VPS already uses pm2 for other
 // processes, since you get `pm2 logs`, `pm2 monit`, and `pm2 status` for this job too
