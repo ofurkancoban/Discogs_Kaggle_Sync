@@ -128,6 +128,9 @@ def build_notebook(
             "    be missing while the upload is still in progress. Returning None keeps the rest\n"
             "    of the notebook runnable instead of failing the whole kernel.\n"
             '    """\n'
+            "    if content_type not in FILES:\n"
+            '        print(f"{content_type}: not part of this dataset, skipping")\n'
+            "        return None\n"
             "    path = os.path.join(DATA_DIR, FILES[content_type])\n"
             "    if not os.path.exists(path):\n"
             '        print(f"{content_type}: not present in this dataset yet, skipping")\n'
