@@ -124,7 +124,12 @@ class KaggleWebClient:
         return result.get("columns") or []
 
     def update_file_metadata(
-        self, file_firestore_path: str, description: str, columns: list[dict]
+        self,
+        dataset_id: int,
+        version_id: int,
+        file_firestore_path: str,
+        description: str,
+        columns: list[dict],
     ) -> dict:
         """Writes one file's description and all of its column descriptions.
 
@@ -137,6 +142,9 @@ class KaggleWebClient:
                 "firestorePath": file_firestore_path,
                 "description": description,
                 "columns": columns,
+                # Without this the server rejects the write with "You must specify
+                # exactly one databundle source".
+                "verificationInfo": {"datasetId": dataset_id, "databundleVersionId": version_id},
             },
         )
         return result.get("usabilityRating") or {}
@@ -205,7 +213,9 @@ def apply_descriptions(
                 file_name, len(undescribed), ", ".join(undescribed[:10]),
             )
 
-        rating = client.update_file_metadata(file_path, file_description, payload_columns)
+        rating = client.update_file_metadata(
+            dataset_id, version_id, file_path, file_description, payload_columns
+        )
         logger.info(
             "%s: wrote description and %d column(s). Usability now %.4f "
             "(file=%s, columns=%s)",
