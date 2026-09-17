@@ -10,3 +10,7 @@ node_modules/
 *.csv
 .DS_Store
 .env
+
+# Contains a captured browser session; never commit
+www.kaggle.com.har
+*.har
