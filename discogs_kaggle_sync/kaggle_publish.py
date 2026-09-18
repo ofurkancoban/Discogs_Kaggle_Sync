@@ -212,7 +212,7 @@ def build_dataset_metadata(
 def wait_for_dataset_ready(
     owner_slug: str,
     dataset_slug: str,
-    timeout_seconds: int = 1800,
+    timeout_seconds: int = 3600,
     poll_interval: int = 15,
 ) -> None:
     """Polls Kaggle API until dataset status reaches 'ready'.
@@ -220,6 +220,11 @@ def wait_for_dataset_ready(
     Kaggle processes multi-gigabyte uploads asynchronously. Metadata updates and
     notebook pushes must wait until status is 'ready', otherwise file descriptions,
     column descriptors, and dataset links will be ignored by Kaggle's backend.
+
+    30 minutes wasn't enough for a real full month (all 4 files, releases.csv ~30GB+):
+    the upload itself completed and the files were live, but status queries kept 403ing
+    for a while past that, presumably while Kaggle finishes server-side indexing of a
+    dataset that size - hence the more generous default.
     """
     from kaggle.api.kaggle_api_extended import KaggleApi
 

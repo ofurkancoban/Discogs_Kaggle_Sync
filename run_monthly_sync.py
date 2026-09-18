@@ -17,7 +17,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from discogs_kaggle_sync import converter, cover_art, downloader, kaggle_publish, logging_setup, notebook, scraper, state
+from discogs_kaggle_sync import converter, cover_art, downloader, kaggle_publish, logging_setup, notebook, scraper, state, web_metadata
 
 logging_setup.configure_logging("sync")
 logger = logging.getLogger("run_monthly_sync")
@@ -210,27 +210,46 @@ def main() -> int:
         logger.info("Updating provenance, file descriptions, column descriptors & settings...")
         kaggle_publish.update_dataset_settings(args.kaggle_owner, dataset_slug, staging_dir)
 
-        logger.info("Publishing companion starter notebook...")
-        notebook_dir = work_dir / "notebook"
-        notebook.write_notebook(
-            notebook_dir, args.kaggle_owner, dataset_slug, month,
-            {ctype: path.name for ctype, path in csv_files.items()},
-        )
-        notebook.push_notebook(notebook_dir)
-        kernel_ref = f"{args.kaggle_owner}/{notebook.kernel_slug_for(dataset_slug)}"
-        notebook.wait_for_run(kernel_ref)
-
         logger.info("Filling file and column descriptions via web session...")
-        usability_score: float | None = None
         try:
             import fill_descriptions
-            rating = fill_descriptions.fill_month(args.kaggle_owner, month, content_types)
+            fill_descriptions.fill_month(args.kaggle_owner, month, content_types)
             state.clear_descriptions_pending(month)
-            usability_score = rating.get("score")
-            logger.info("%s web descriptions filled. Final usability rating: %s", month, usability_score)
+            logger.info("%s web descriptions filled.", month)
         except Exception as e:
             state.mark_descriptions_pending(month)
             logger.warning("Web description update for %s skipped/queued for later: %s", month, e)
+
+        # Notebook goes last: it's the slowest step (has to actually finish running on
+        # Kaggle, not just get pushed - can queue behind Kaggle's shared compute for a
+        # long time) and the least likely to matter to anything else in this run, so
+        # descriptions/provenance land first and a slow/failed notebook run doesn't crash
+        # a publish that's otherwise complete - the usability score re-read below will
+        # correctly reflect a missing notebook and keep local files in place either way.
+        logger.info("Publishing companion starter notebook...")
+        try:
+            notebook_dir = work_dir / "notebook"
+            notebook.write_notebook(
+                notebook_dir, args.kaggle_owner, dataset_slug, month,
+                {ctype: path.name for ctype, path in csv_files.items()},
+            )
+            notebook.push_notebook(notebook_dir)
+            kernel_ref = f"{args.kaggle_owner}/{notebook.kernel_slug_for(dataset_slug)}"
+            notebook.wait_for_run(kernel_ref)
+        except Exception as e:
+            logger.warning("Notebook publish/run for %s did not complete: %s", month, e)
+
+        # The score fill_descriptions saw above predates the notebook existing, so it
+        # can't reflect publicKernelScore yet - re-read the live rating now that
+        # everything (descriptions, provenance, notebook) is actually in place.
+        usability_score: float | None = None
+        try:
+            client = web_metadata.KaggleWebClient()
+            basics = client.dataset_basics(args.kaggle_owner, dataset_slug)
+            usability_score = client.usability_rating(basics["datasetId"]).get("score")
+            logger.info("%s final usability rating: %s", month, usability_score)
+        except Exception as e:
+            logger.warning("Could not confirm final usability rating for %s: %s", month, e)
 
         # Only a perfect score means Kaggle's "Pending Actions" checklist is actually
         # clear - the documented API can report success (no exception above) while

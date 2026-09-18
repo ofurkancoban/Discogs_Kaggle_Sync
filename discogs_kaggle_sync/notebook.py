@@ -309,7 +309,7 @@ def push_notebook(notebook_dir: Path) -> None:
 
 def wait_for_run(
     kernel_ref: str,  # "owner_slug/kernel_slug"
-    timeout_seconds: int = 900,
+    timeout_seconds: int = 3600,
     poll_interval: int = 15,
 ) -> None:
     """Blocks until the just-pushed notebook finishes executing on Kaggle.
@@ -318,6 +318,11 @@ def wait_for_run(
     item only clears once that run actually finishes successfully, not merely on push.
     Raises on failure/timeout so a broken notebook is visible instead of silently leaving
     that checklist item unmet.
+
+    900s wasn't enough for a real month's data (as opposed to the tiny labels-only
+    dataset this was tuned against): the kernel was still RUNNING well past that, most
+    likely queued behind Kaggle's shared compute rather than genuinely stuck - hence the
+    more generous default, matching wait_for_dataset_ready's same finding.
     """
     from kaggle.api.kaggle_api_extended import KaggleApi
     from kagglesdk.kernels.types.kernels_enums import KernelWorkerStatus
