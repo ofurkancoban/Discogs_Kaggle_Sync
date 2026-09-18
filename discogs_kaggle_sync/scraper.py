@@ -114,3 +114,12 @@ def latest_month_files() -> tuple[str, list[DumpFile]]:
         return latest_month, [f for f in files if f.month == latest_month]
 
     raise RuntimeError("No dump files found in any year directory")
+
+
+def files_for_month(month: str) -> list[DumpFile]:
+    """Returns the dump files for a specific "YYYY-MM" month, wherever it falls in the
+    year directory listing (a year's directory holds every month's files, keyed by
+    filename, not by a separate month-level prefix)."""
+    year = month.split("-")[0]
+    files = [f for f in list_files_in_directory(f"{DATA_PREFIX}{year}/") if f.content_type != "checksum"]
+    return [f for f in files if f.month == month]

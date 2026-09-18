@@ -269,6 +269,13 @@ def delete_dataset(owner_slug: str, dataset_slug: str) -> None:
         raise RuntimeError(f"Kaggle delete failed for {ref} (exit {result.returncode})")
 
 
+# Phrases the Kaggle CLI prints to stdout on a failed `datasets create` while still
+# exiting 0 - e.g. a stale/undeleted dataset already holding the target title. Caught one
+# of these in production: the create silently no-opped and every later step (settings,
+# notebook, descriptions) ended up operating on the old dataset instead of a new one.
+_PUBLISH_FAILURE_PHRASES = ("error", "already in use", "already exists")
+
+
 def publish_dataset(staging_dir: Path) -> None:
     """Runs `kaggle datasets create` for the metadata/CSVs staged in `staging_dir`."""
     result = subprocess.run(
@@ -277,10 +284,16 @@ def publish_dataset(staging_dir: Path) -> None:
         [_kaggle_cmd(), "datasets", "create", "-p", str(staging_dir), "-r", "skip", "-u"],
         capture_output=True, text=True,
     )
-    logger.info("kaggle datasets create stdout: %s", result.stdout.strip())
+    stdout = result.stdout.strip()
+    logger.info("kaggle datasets create stdout: %s", stdout)
     if result.returncode != 0:
         logger.error("kaggle datasets create stderr: %s", result.stderr.strip())
         raise RuntimeError(f"Kaggle publish failed (exit {result.returncode})")
+    if any(phrase in stdout.lower() for phrase in _PUBLISH_FAILURE_PHRASES):
+        raise RuntimeError(
+            f"kaggle datasets create exited 0 but its output looks like a failure: {stdout!r}. "
+            "If a dataset already exists at this slug, delete it first or pass --replace-existing."
+        )
 
 
 METADATA_UPDATE_MAX_RETRIES = 8

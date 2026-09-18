@@ -107,7 +107,10 @@ def main() -> int:
     if args.month:
         month = args.month
         logger.info("Target month specified: %s", month)
-        _, files = scraper.latest_month_files() # to get file list format reference if needed
+        files = scraper.files_for_month(month)
+        if not files:
+            logger.error("No dump files found for %s on data.discogs.com", month)
+            return 1
     else:
         logger.info("Checking for the latest Discogs dump month...")
         month, files = scraper.latest_month_files()
