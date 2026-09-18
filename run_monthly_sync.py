@@ -169,7 +169,7 @@ def main() -> int:
 
             cover_path = staging_dir / "dataset-cover-image.png"
             logger.info("Generating cover image for %s...", month)
-            cover_art.generate_cover_image(month, cover_path)
+            cover_art.generate_monthly_cover(month, cover_path)
 
             logger.info("Building Kaggle dataset metadata...")
             kaggle_publish.build_dataset_metadata(staging_dir, args.kaggle_owner, month, csv_files)
@@ -197,7 +197,7 @@ def main() -> int:
             cover_path = staging_dir / "dataset-cover-image.png"
             if not cover_path.exists():
                 logger.info("Generating cover image for %s...", month)
-                cover_art.generate_cover_image(month, cover_path)
+                cover_art.generate_monthly_cover(month, cover_path)
 
             logger.info("Building Kaggle dataset metadata...")
             kaggle_publish.build_dataset_metadata(staging_dir, args.kaggle_owner, month, csv_files)

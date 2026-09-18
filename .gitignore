@@ -23,3 +23,6 @@ state/
 # Contains a captured browser session; never commit
 www.kaggle.com.har
 *.har
+
+# Scratch output from testing AI-generated cover art prompts
+cover_art_tests/
