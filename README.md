@@ -10,27 +10,80 @@ convert it from XML.GZ to CSV, and publish it as a new Kaggle dataset (e.g.
 1. **Check for a new month** - scrapes `data.discogs.com` for the most recent month with
    `artists`/`labels`/`masters`/`releases` dumps.
 2. **Skip if already published** - `state/published_months.json` tracks what's already on
-   Kaggle, so re-running (or an overlapping cron run) is always safe.
+   Kaggle, so re-running (or an overlapping cron run) is always safe. A disk-space check
+   also fails fast here if there isn't enough room for the month about to be processed.
 3. **Download** each of the 4 files with resume-on-reconnect (`discogs_kaggle_sync/downloader.py`).
 4. **Convert** each `.xml.gz` straight to CSV (`discogs_kaggle_sync/converter.py`) - the
    two-pass column-discovery-then-write approach from the DiscogsGUI project, but chunking
    reads directly off the gzip stream instead of a fully-decompressed `.xml` file, since the
    `releases` dump alone is ~10GB compressed and tens of GB unpacked. The compressed file is
    deleted the moment its CSV exists, so peak disk usage stays as low as this format allows.
-5. **Publish to Kaggle** as a new dataset (`discogs_kaggle_sync/kaggle_publish.py`) - one
+5. **Generate a cover image** (`discogs_kaggle_sync/cover_art.py`) - a fresh AI-generated
+   record-shop background photo (via Hugging Face's free inference API, a different random
+   seed every month) with the "Discogs" logo and the year/month composited on top; falls
+   back to a static base image if AI generation isn't available for any reason.
+6. **Publish to Kaggle** as a new dataset (`discogs_kaggle_sync/kaggle_publish.py`) - one
    dataset per month, matching the existing manually-published naming pattern. Column
    descriptions come from `discogs_kaggle_sync/column_descriptions/*.json`, written once per
    content type and reused every month (Discogs' XML schema barely changes month to month).
    Any column not in that file gets a generic placeholder description and a warning in the
    log, so schema drift is visible instead of silently under-documented.
-6. **Publish a companion starter notebook** (`discogs_kaggle_sync/notebook.py`) and wait
+7. **Fill in what Kaggle's public API silently drops** (`discogs_kaggle_sync/web_metadata.py`,
+   driven by `fill_descriptions.py`) - file/column descriptions and the Provenance section
+   (Sources + Collection Methodology) all go through an undocumented endpoint that only
+   accepts a browser session, not the `kaggle.json` API token. See
+   [Web session for metadata](#web-session-for-metadata) below.
+8. **Publish a companion starter notebook** (`discogs_kaggle_sync/notebook.py`) and wait
    for it to actually finish running on Kaggle - a `kernels push` only queues the run, and
    Kaggle's "Publish a notebook" checklist item only clears once it completes successfully.
-7. **Fill in what Kaggle's public API silently drops** (`discogs_kaggle_sync/web_metadata.py`,
-   driven by `fill_descriptions.py`) - file/column descriptions, the Provenance section
-   (Sources + Collection Methodology), and the usability-rating recompute itself all go
-   through an undocumented endpoint that only accepts a browser session, not the
-   `kaggle.json` API token. See [Web session for metadata](#web-session-for-metadata) below.
+   This step runs last and its failure doesn't block anything above: the final usability
+   score is re-read afterward, and local files are only cleaned up once that score is a
+   perfect 1.0 - otherwise they're left in place for a retry.
+
+```mermaid
+flowchart TD
+    CRON["Daily cron / pm2 (0 6 * * *)"] --> RMS["run_monthly_sync.py"]
+
+    RMS --> SCRAPE["scraper.py: find latest/target month"]
+    SCRAPE -->|HTTP| DISCOGS[("data.discogs.com")]
+
+    SCRAPE --> CHECK{"Already in<br/>published_months.json?"}
+    CHECK -->|"yes, no --force"| DONE1(["exit: nothing to do"])
+    CHECK -->|no| DISK{"Enough disk<br/>space free?"}
+    DISK -->|no| FAIL1(["exit 1"])
+    DISK -->|yes| DL
+
+    subgraph PER["per content type: artists / labels / masters / releases"]
+        DL["downloader.py<br/>resumable .xml.gz download"] --> CONV["converter.py<br/>stream XML.GZ to CSV"]
+    end
+    DL -->|HTTP| DISCOGS
+
+    CONV --> COVER["cover_art.py<br/>AI background + logo + year/month text"]
+    COVER -->|"POST sd3-medium"| HF[("Hugging Face<br/>free inference API")]
+
+    COVER --> PUBLISH["kaggle_publish.py<br/>datasets create + settings"]
+    PUBLISH -->|"kaggle.json token"| KAPI[("Kaggle public API")]
+
+    PUBLISH --> DESC["fill_descriptions.fill_month()<br/>via web_metadata.py"]
+    DESC -->|"browser session cookie"| KWEB[("Kaggle internal web API<br/>undocumented")]
+
+    DESC --> NB["notebook.py<br/>push starter notebook,<br/>wait for it to finish running"]
+    NB -->|"kaggle.json token"| KAPI
+
+    NB --> SCORE{"Usability score<br/>== 1.0 ?"}
+    SCORE -->|yes| CLEAN["delete work/&lt;month&gt;,<br/>mark month published"]
+    SCORE -->|no| KEEP["keep local files,<br/>queue pending_descriptions.json"]
+
+    CLEAN --> STATE1[("state/published_months.json")]
+    KEEP --> STATE2[("state/pending_descriptions.json")]
+
+    subgraph MAINT["separate maintenance entry point"]
+        FD["fill_descriptions.py"]
+        FD -->|"--pending"| DESC
+        FD -->|"--audit"| AUDIT["compare state vs.<br/>live Kaggle usability rating"]
+        FD -->|"--check-session / --auto-login / --set-session"| SESSION["refresh the browser session<br/>for Kaggle's internal API"]
+    end
+```
 
 ## Requirements
 
