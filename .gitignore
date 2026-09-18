@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+.ipynb_checkpoints/
 .venv/
 venv/
 work/
@@ -10,6 +14,11 @@ node_modules/
 *.csv
 .DS_Store
 .env
+
+# Runtime state (published-months tracking, pending-description queue) - differs per
+# environment (local machine vs. VPS), so it must never be committed or it'll cause the
+# exact kind of divergence that makes a naive `cp`/sync between machines destructive.
+state/
 
 # Contains a captured browser session; never commit
 www.kaggle.com.har

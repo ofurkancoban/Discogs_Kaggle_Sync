@@ -95,14 +95,28 @@ def _subtitle(month_label: str) -> str:
 
 
 def _provenance_sources(month_label: str) -> str:
+    # This maps to the "Sources" box specifically, not the whole Provenance section - see
+    # collection_methods() for the separate "Collection Methodology" box.
     return (
-        f"Sources: The Discogs Data Dumps ({month_label}) were sourced directly from the "
-        "official Discogs Data Dumps web page. The original dataset was provided in XML.GZ "
-        "format, which was then processed and converted into CSV format automatically.\n\n"
-        "Collection Methodology: Since the data is sourced directly from Discogs' open "
-        "database, it reflects real-world contributions from users worldwide, ensuring "
-        "accuracy and depth across different music genres and formats."
+        f"The Discogs Data Dumps ({month_label}) were sourced directly from the official "
+        "Discogs Data Dumps web page. The original dataset was provided in XML.GZ format, "
+        "which was then processed and converted into CSV format automatically."
     )
+
+
+def collection_methods() -> str:
+    """"Collection Methodology" box text - part of Provenance, but a separate field from
+    _provenance_sources() with no equivalent in DatasetSettings (see dataset_types.py), so
+    it can't be sent through dataset_metadata_update(); web_metadata.apply_provenance()
+    writes it through the same undocumented service that file/column descriptions use."""
+    return (
+        "Since the data is sourced directly from Discogs' open database, it reflects "
+        "real-world contributions from users worldwide, ensuring accuracy and depth "
+        "across different music genres and formats."
+    )
+
+
+EXPECTED_UPDATE_FREQUENCY = "monthly"
 
 
 def dataset_slug_for(month: str) -> str:
@@ -110,6 +124,12 @@ def dataset_slug_for(month: str) -> str:
     of the prior manually-published datasets."""
     year, month_num = month.split("-")
     return f"discogs-data-dumps-{month_name[int(month_num)].lower()}-{year}"
+
+
+def month_label_for(month: str) -> str:
+    """"YYYY-MM" -> "<Month name> <year>", e.g. "2026-09" -> "September 2026"."""
+    year, month_num = month.split("-")
+    return f"{month_name[int(month_num)]} {year}"
 
 
 def build_dataset_metadata(
@@ -124,6 +144,7 @@ def build_dataset_metadata(
     dataset_slug = dataset_slug_for(month)
 
     resources = []
+    data_entries = []
     for content_type, csv_path in csv_files.items():
         descriptions = _load_descriptions(content_type)
         header = _csv_header(csv_path)
@@ -135,19 +156,32 @@ def build_dataset_metadata(
                 content_type, len(missing), ", ".join(missing[:10]) + ("..." if len(missing) > 10 else ""),
             )
 
-        fields = [
-            {
+        fields = []
+        columns = []
+        for col in header:
+            desc = descriptions.get(col) or f"Field {col} from Discogs {content_type} dump."
+            fields.append({
                 "name": col,
-                "description": descriptions.get(col, f"Auto-generated field: {col}"),
+                "description": desc,
                 "type": "string",
-            }
-            for col in header
-        ]
+            })
+            columns.append({
+                "name": col,
+                "description": desc,
+                "type": "string",
+            })
+
+        file_desc = FILE_DESCRIPTIONS.get(content_type, f"Metadata dump for Discogs {content_type}.")
 
         resources.append({
             "path": csv_path.name,
-            "description": FILE_DESCRIPTIONS.get(content_type, ""),
+            "description": file_desc,
             "schema": {"fields": fields},
+        })
+        data_entries.append({
+            "name": csv_path.name,
+            "description": file_desc,
+            "columns": columns,
         })
 
     # No resources entry for the cover image: a file named exactly
@@ -167,11 +201,48 @@ def build_dataset_metadata(
         "userSpecifiedSources": _provenance_sources(month_label),
         "expectedUpdateFrequency": "monthly",
         "resources": resources,
+        "data": data_entries,
     }
 
     metadata_path = staging_dir / "dataset-metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return metadata_path
+
+
+def wait_for_dataset_ready(
+    owner_slug: str,
+    dataset_slug: str,
+    timeout_seconds: int = 1800,
+    poll_interval: int = 15,
+) -> None:
+    """Polls Kaggle API until dataset status reaches 'ready'.
+
+    Kaggle processes multi-gigabyte uploads asynchronously. Metadata updates and
+    notebook pushes must wait until status is 'ready', otherwise file descriptions,
+    column descriptors, and dataset links will be ignored by Kaggle's backend.
+    """
+    from kaggle.api.kaggle_api_extended import KaggleApi
+
+    ref = f"{owner_slug}/{dataset_slug}"
+    api = KaggleApi()
+    api.authenticate()
+    start_time = time.time()
+    logger.info("Waiting for Kaggle dataset %s to reach 'ready' status...", ref)
+    while time.time() - start_time < timeout_seconds:
+        try:
+            status = api.dataset_status(ref)
+            logger.info("Dataset %s status: %s", ref, status)
+            if status == "ready":
+                return
+            elif status in ("error", "failed"):
+                raise RuntimeError(f"Kaggle dataset {ref} creation failed with status: {status}")
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            logger.warning("Error querying dataset status for %s: %s", ref, e)
+        time.sleep(poll_interval)
+    raise TimeoutError(f"Dataset {ref} did not become ready within {timeout_seconds} seconds")
+
 
 
 def _kaggle_cmd() -> str:
@@ -301,7 +372,6 @@ def update_dataset_settings(owner_slug: str, dataset_slug: str, staging_dir: Pat
     for attempt in range(1, METADATA_UPDATE_MAX_RETRIES + 1):
         try:
             api.dataset_metadata_update(ref, str(staging_dir))
-            return
         except KeyboardInterrupt:
             raise
         except BaseException as e:  # noqa: BLE001 - dataset_metadata_update calls exit(1) on
@@ -314,4 +384,41 @@ def update_dataset_settings(owner_slug: str, dataset_slug: str, staging_dir: Pat
             )
             if attempt < METADATA_UPDATE_MAX_RETRIES:
                 time.sleep(METADATA_UPDATE_RETRY_DELAY_SECONDS)
+            continue
+
+        # dataset_metadata_update() returning without an exception does not mean the
+        # write actually landed - Kaggle accepts the request and silently drops
+        # userSpecifiedSources/expectedUpdateFrequency if the dataset's async processing
+        # from publish_dataset() hasn't fully settled yet. Read the live metadata back
+        # and retry the whole update if either field is still empty.
+        missing = _missing_provenance_fields(api, ref, staging_dir)
+        if not missing:
+            return
+        last_error = RuntimeError(f"fields not applied after update: {', '.join(missing)}")
+        logger.warning(
+            "dataset_metadata_update reported success but %s (attempt %d/%d)",
+            last_error, attempt, METADATA_UPDATE_MAX_RETRIES,
+        )
+        if attempt < METADATA_UPDATE_MAX_RETRIES:
+            time.sleep(METADATA_UPDATE_RETRY_DELAY_SECONDS)
     raise RuntimeError(f"Kaggle metadata update failed for {ref} after {METADATA_UPDATE_MAX_RETRIES} attempts") from last_error
+
+
+def _missing_provenance_fields(api, ref: str, staging_dir: Path) -> list[str]:
+    """Re-downloads the live dataset metadata and reports which of
+    userSpecifiedSources/expectedUpdateFrequency are still empty, given what
+    dataset-metadata.json in staging_dir asked for."""
+    import tempfile
+
+    wanted = json.loads((staging_dir / "dataset-metadata.json").read_text(encoding="utf-8"))
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        meta_path = api.dataset_metadata(ref, tmp_dir)
+        live = json.loads(Path(meta_path).read_text(encoding="utf-8"))
+    live = live.get("info") or live
+
+    missing = []
+    if wanted.get("userSpecifiedSources") and not live.get("userSpecifiedSources"):
+        missing.append("userSpecifiedSources")
+    if wanted.get("expectedUpdateFrequency") and not live.get("expectedUpdateFrequency"):
+        missing.append("expectedUpdateFrequency")
+    return missing

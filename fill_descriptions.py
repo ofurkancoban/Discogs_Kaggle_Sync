@@ -15,9 +15,9 @@ import argparse
 import logging
 import sys
 
-from discogs_kaggle_sync import kaggle_publish, state, web_metadata
+from discogs_kaggle_sync import kaggle_publish, logging_setup, state, web_metadata
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging_setup.configure_logging("fill_descriptions")
 logger = logging.getLogger("fill_descriptions")
 
 CONTENT_TYPES = ("artists", "labels", "masters", "releases")
@@ -39,9 +39,17 @@ def fill_month(owner_slug: str, month: str, content_types: tuple[str, ...]) -> d
 
     dataset_slug = kaggle_publish.dataset_slug_for(month)
     logger.info("Filling descriptions on %s/%s", owner_slug, dataset_slug)
-    return web_metadata.apply_descriptions(
+    rating = web_metadata.apply_descriptions(
         owner_slug, dataset_slug, file_descriptions, column_descriptions,
     )
+
+    month_label = kaggle_publish.month_label_for(month)
+    rating = web_metadata.apply_provenance(
+        owner_slug, dataset_slug,
+        user_specified_sources=kaggle_publish._provenance_sources(month_label),
+        collection_methods=kaggle_publish.collection_methods(),
+    )
+    return rating
 
 
 def main() -> int:
@@ -69,11 +77,32 @@ def main() -> int:
         help="Read a browser 'Copy as cURL' command on stdin and write it to the session "
              "file. Use it when --check-session says the session has expired.",
     )
+    parser.add_argument(
+        "--auto-login", action="store_true",
+        help="Perform automatic HTTP login using KAGGLE_USER and KAGGLE_PASSWORD env vars / .env to refresh web_session.json.",
+    )
+    parser.add_argument(
+        "--audit", action="store_true",
+        help="Check every month in state/published_months.json against Kaggle's live "
+             "usability rating. Read-only: reports any dataset that's missing, unreadable, "
+             "or short of a perfect score, without modifying anything or state. Run this "
+             "periodically to catch drift between 'marked published' and 'actually complete "
+             "on Kaggle' - the documented API can report a publish as successful while "
+             "checklist items like provenance or the notebook are still unmet.",
+    )
     args = parser.parse_args()
 
     content_types = (
         tuple(t.strip() for t in args.only_types.split(",")) if args.only_types else CONTENT_TYPES
     )
+
+    if args.auto_login:
+        try:
+            web_metadata.auto_login()
+            logger.info("Auto-login succeeded.")
+        except web_metadata.KaggleWebSessionError as e:
+            logger.error("Auto-login failed: %s", e)
+            return 2
 
     if args.set_session:
         try:
@@ -94,6 +123,46 @@ def main() -> int:
             return 2
         logger.info("%s", detail)
         return 0 if ok else 2
+
+    if args.audit:
+        if not args.kaggle_owner:
+            parser.error("--kaggle-owner is required with --audit")
+        months = sorted(state.load_published_months())
+        if not months:
+            logger.info("No months are marked published yet.")
+            return 0
+        try:
+            ok, detail = web_metadata.check_session()
+        except web_metadata.KaggleWebSessionError as e:
+            logger.error("%s", e)
+            return 2
+        if not ok:
+            logger.error("%s", detail)
+            return 2
+        logger.info("%s", detail)
+
+        client = web_metadata.KaggleWebClient()
+        problems = []
+        for month in months:
+            dataset_slug = kaggle_publish.dataset_slug_for(month)
+            try:
+                basics = client.dataset_basics(args.kaggle_owner, dataset_slug)
+                rating = client.usability_rating(basics["datasetId"])
+                score = rating.get("score", 0)
+                if score < 0.999:
+                    logger.warning("%s (%s): usability score %.4f, not perfect - %s", month, dataset_slug, score, rating)
+                    problems.append(month)
+                else:
+                    logger.info("%s (%s): OK, score 1.0", month, dataset_slug)
+            except Exception as e:
+                logger.error("%s (%s): could not verify - %s", month, dataset_slug, e)
+                problems.append(month)
+
+        if problems:
+            logger.warning("%d/%d month(s) need attention: %s", len(problems), len(months), ", ".join(problems))
+            return 1
+        logger.info("All %d published month(s) verified complete on Kaggle.", len(months))
+        return 0
 
     if args.pending:
         if not args.kaggle_owner:

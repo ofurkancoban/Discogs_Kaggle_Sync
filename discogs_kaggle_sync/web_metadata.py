@@ -39,19 +39,12 @@ class KaggleWebSessionError(RuntimeError):
 
 
 def load_session(path: Path = DEFAULT_SESSION_PATH) -> dict[str, str]:
-    """Reads the browser session exported from a logged-in Kaggle tab.
-
-    The file is JSON with two keys, both copied from any authenticated request in the
-    browser's network inspector:
-
-        {"cookie": "<the whole Cookie request header>",
-         "xsrfToken": "<the x-xsrf-token request header>"}
-    """
+    """Reads the browser session exported from a logged-in Kaggle tab."""
     if not path.exists():
         raise KaggleWebSessionError(
             f"No Kaggle web session at {path}. Copy the 'Cookie' and 'x-xsrf-token' "
-            "request headers from a logged-in kaggle.com tab into that file as "
-            '{"cookie": "...", "xsrfToken": "..."}.'
+            "request headers from a logged-in kaggle.com tab into that file or set "
+            "KAGGLE_USER and KAGGLE_PASSWORD in environment / .env for auto-login."
         )
     session = json.loads(path.read_text(encoding="utf-8"))
     missing = [k for k in ("cookie", "xsrfToken") if not session.get(k)]
@@ -60,12 +53,111 @@ def load_session(path: Path = DEFAULT_SESSION_PATH) -> dict[str, str]:
     return session
 
 
-def session_expiry(session: dict[str, str] | None = None) -> datetime | None:
-    """Returns when the session's client token stops being valid, if it can be read.
+def auto_login(
+    user_identifier: str | None = None,
+    password: str | None = None,
+    path: Path = DEFAULT_SESSION_PATH,
+) -> dict[str, str]:
+    """Automatically authenticates to Kaggle via HTTP login request using credentials.
 
-    The token is an unsigned JWT sitting in the cookie jar; only its expiry is read here,
-    to warn before a monthly run silently loses the ability to write descriptions.
+    Reads user_identifier (email/username) and password from parameters or environment
+    variables KAGGLE_USER / KAGGLE_USERNAME / KAGGLE_EMAIL and KAGGLE_PASSWORD (or .env).
+    Saves the resulting session cookies and XSRF token to `path` (default ~/.kaggle/web_session.json).
     """
+    import os
+    user_identifier = (
+        user_identifier
+        or os.getenv("KAGGLE_EMAIL")
+        or os.getenv("KAGGLE_USERNAME")
+        or os.getenv("KAGGLE_USER")
+    )
+    password = password or os.getenv("KAGGLE_PASSWORD")
+
+    env_file = Path(__file__).parent.parent / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip().strip("'\"")
+            if not user_identifier and k in ("KAGGLE_EMAIL", "KAGGLE_USERNAME", "KAGGLE_USER"):
+                user_identifier = v
+            if not password and k == "KAGGLE_PASSWORD":
+                password = v
+
+    if not user_identifier or not password:
+        raise KaggleWebSessionError(
+            "Automatic login requires credentials. Set KAGGLE_USER (or KAGGLE_EMAIL) "
+            "and KAGGLE_PASSWORD environment variables or add them to .env file."
+        )
+
+    session = requests.Session()
+
+    init_res = session.get("https://www.kaggle.com/account/login", timeout=30)
+    init_res.raise_for_status()
+
+    xsrf_token = session.cookies.get("XSRF-TOKEN") or session.cookies.get("CSRF-TOKEN")
+    if not xsrf_token:
+        raise KaggleWebSessionError("Could not retrieve XSRF token from Kaggle login page.")
+
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json",
+        "origin": "https://www.kaggle.com",
+        "referer": "https://www.kaggle.com/account/login",
+        "x-xsrf-token": xsrf_token,
+    }
+
+    payloads = [
+        {"email": user_identifier, "password": password},
+        {"userIdentifier": user_identifier, "password": password},
+        {"username": user_identifier, "password": password},
+    ]
+
+    last_resp = None
+    for payload in payloads:
+        try:
+            resp = session.post(
+                "https://www.kaggle.com/api/i/users.LegacyUsersService/EmailSignIn",
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
+            last_resp = resp
+            if resp.status_code == 200 and ("redirectUrl" in resp.text or "__Host-KAGGLEID" in session.cookies):
+                break
+        except Exception:
+            continue
+
+    if not session.cookies or ("__Host-KAGGLEID" not in session.cookies and "ka_db" not in session.cookies):
+        detail = last_resp.text if last_resp else "No response"
+        raise KaggleWebSessionError(
+            f"Kaggle automatic login failed (status {getattr(last_resp, 'status_code', 'unknown')}): {detail}"
+        )
+
+    # The sign-in response only sets __Host-KAGGLEID/ka_db; CLIENT-TOKEN (the JWT the
+    # internal api/i/* services actually authenticate against) still holds the
+    # pre-login anonymous identity at this point and every api/i/* call 400s until it's
+    # refreshed. Loading any page mints a fresh CLIENT-TOKEN tied to the now-authenticated
+    # session cookies, so do that before exporting the session.
+    home_res = session.get("https://www.kaggle.com/", timeout=30)
+    home_res.raise_for_status()
+
+    cookie_parts = [f"{k}={v}" for k, v in session.cookies.items()]
+    cookie_str = "; ".join(cookie_parts)
+    xsrf = session.cookies.get("XSRF-TOKEN") or xsrf_token
+
+    session_data = {"cookie": cookie_str, "xsrfToken": xsrf}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(session_data, indent=2), encoding="utf-8")
+    path.chmod(0o600)
+    logger.info("Successfully refreshed Kaggle web session at %s", path)
+    return session_data
+
+
+def session_expiry(session: dict[str, str] | None = None) -> datetime | None:
+    """Returns when the session's client token stops being valid, if it can be read."""
     session = session or load_session()
     jar = dict(
         part.strip().split("=", 1)
@@ -84,17 +176,33 @@ def session_expiry(session: dict[str, str] | None = None) -> datetime | None:
         return None
 
 
-def check_session(session: dict[str, str] | None = None) -> tuple[bool, str]:
+def check_session(session: dict[str, str] | None = None, auto_refresh: bool = True) -> tuple[bool, str]:
     """Confirms the exported session still authenticates, before relying on it."""
-    session = session or load_session()
+    try:
+        session = session or load_session()
+    except KaggleWebSessionError as e:
+        if auto_refresh:
+            try:
+                session = auto_login()
+            except Exception as login_err:
+                return False, f"{e} (Auto-login failed: {login_err})"
+        else:
+            return False, str(e)
+
     client = KaggleWebClient(session)
     try:
         user = client._post("users.UsersService/GetCurrentUser", {})
     except KaggleWebSessionError as e:
-        return False, str(e)
+        if auto_refresh:
+            try:
+                session = auto_login()
+                client = KaggleWebClient(session)
+                user = client._post("users.UsersService/GetCurrentUser", {})
+            except Exception as login_err:
+                return False, f"Session expired ({e}); auto-login failed: {login_err}"
+        else:
+            return False, str(e)
     except requests.RequestException as e:
-        # A malformed or half-expired cookie jar comes back as 400 rather than 401, and a
-        # network hiccup should not look different here: either way the session is unusable.
         return False, f"Could not confirm the Kaggle session: {e}"
 
     name = user.get("displayName") or user.get("userName")
@@ -168,7 +276,11 @@ class KaggleWebClient:
             },
             timeout=60,
         )
-        if response.status_code in (401, 403):
+        if response.status_code in (400, 401, 403):
+            # A stale CLIENT-TOKEN (the pre-login/anonymous one, e.g. from a session
+            # exported before the homepage reload that mints the authenticated one -
+            # see auto_login) makes every api/i/* call 400 rather than 401/403, so it
+            # has to be treated the same as an expired session.
             raise KaggleWebSessionError(
                 f"{service_method} returned {response.status_code}. The exported session has "
                 "most likely expired; copy a fresh cookie and x-xsrf-token from the browser."
@@ -190,6 +302,17 @@ class KaggleWebClient:
             {"ownerSlug": owner_slug, "datasetSlug": dataset_slug},
             referer=f"https://www.kaggle.com/datasets/{owner_slug}/{dataset_slug}",
         )
+
+    def usability_rating(self, dataset_id: int) -> dict:
+        """Returns the same score breakdown shown on the dataset page's "Pending Actions"
+        panel (score, columnDescriptionScore, provenanceScore, publicKernelScore, etc.) -
+        the only reliable way to confirm a dataset is actually complete, since the
+        documented API can report a publish as "successful" while several of these
+        checklist items are still unmet (see module docstring)."""
+        return self._post(
+            "datasets.DatasetDetailService/GetDatasetUsabilityRating",
+            {"datasetId": dataset_id, "hashLink": ""},
+        ).get("rating") or {}
 
     def file_columns(self, dataset_id: int, version_id: int, file_firestore_path: str) -> list[dict]:
         """Returns each column of one file with the Firestore path needed to write to it."""
@@ -240,6 +363,57 @@ class KaggleWebClient:
             },
         )
         return result.get("usabilityRating") or {}
+
+    def update_provenance(
+        self,
+        version_id: int,
+        user_specified_sources: str,
+        collection_methods: str,
+    ) -> dict:
+        """Writes the Provenance section's Sources and Collection Methodology fields on
+        the dataset's current version.
+
+        Unlike userSpecifiedSources on the public API's DatasetSettings
+        (kaggle_publish.update_dataset_settings), this is the call that actually triggers
+        Kaggle's usability-rating recompute - the public API accepts and stores that field
+        fine, but the "Specify provenance" checklist item (and every other checklist item,
+        expectedUpdateFrequency included) never clears until something calls this service,
+        and collectionMethods has no field in DatasetSettings at all to write through the
+        public API in the first place. Returns the resulting usability rating breakdown
+        (this call's response *is* the rating, not a separate confirmation).
+        """
+        return self._post(
+            "datasets.DatasetService/UpdateDatasetMetadata",
+            {
+                "datasetVersionId": version_id,
+                "datasetVersionMetadata": {
+                    "collectionMethods": collection_methods,
+                    "datasetVersionAuthors": [],
+                    "userSpecifiedSources": user_specified_sources,
+                    "citations": [],
+                },
+                "updateMask": "collectionMethods,userSpecifiedSources",
+            },
+        )
+
+
+def apply_provenance(
+    owner_slug: str,
+    dataset_slug: str,
+    user_specified_sources: str,
+    collection_methods: str,
+    client: KaggleWebClient | None = None,
+) -> dict:
+    """Applies Sources and Collection Methodology to the dataset's current version, which
+    also triggers Kaggle to recompute the usability rating (including expectedUpdateFrequency,
+    already set via the public API but never scored until this fires). Returns the
+    resulting usability rating breakdown."""
+    client = client or KaggleWebClient()
+    basics = client.dataset_basics(owner_slug, dataset_slug)
+    version_id = basics.get("datasetVersionId")
+    if not version_id:
+        raise RuntimeError(f"{owner_slug}/{dataset_slug} has no datasetVersionId yet.")
+    return client.update_provenance(version_id, user_specified_sources, collection_methods)
 
 
 def apply_descriptions(

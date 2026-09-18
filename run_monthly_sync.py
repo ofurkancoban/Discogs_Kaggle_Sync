@@ -12,19 +12,57 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import shutil
 import sys
 from pathlib import Path
 
-from discogs_kaggle_sync import converter, cover_art, downloader, kaggle_publish, notebook, scraper, state
+from discogs_kaggle_sync import converter, cover_art, downloader, kaggle_publish, logging_setup, notebook, scraper, state
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+logging_setup.configure_logging("sync")
 logger = logging.getLogger("run_monthly_sync")
 
 CONTENT_TYPES = ("artists", "labels", "masters", "releases")
+
+# Multiplier applied to the compressed download size to estimate final disk usage:
+# converter.py deletes each .xml.gz right after producing its .csv, so peak usage is
+# roughly the sum of all final CSVs (XML decompresses to several times its gzipped size -
+# releases.xml.gz -> releases.csv was ~3.2x on a real run) plus the one gz currently
+# downloading, which this multiplier already covers with room to spare.
+_DISK_ESTIMATE_MULTIPLIER = 5
+_DISK_MIN_REQUIRED_BYTES = 15 * 1024**3  # floor for small/partial (--only-types) runs
+
+_SIZE_RE = re.compile(r"([\d.]+)\s*([KMGT]?B)")
+_SIZE_UNITS = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+
+
+def _parse_size_to_bytes(size_display: str) -> float:
+    """"10.5 GB" -> bytes. Returns 0 if the text doesn't match the expected format."""
+    m = _SIZE_RE.match(size_display.strip())
+    if not m:
+        return 0
+    value, unit = m.groups()
+    return float(value) * _SIZE_UNITS.get(unit, 1)
+
+
+def _ensure_disk_space(work_dir: Path, dumps) -> None:
+    """Fails fast with a clear message instead of dying mid-download with an OS-level
+    'no space left on device' error hours into a multi-GB run."""
+    compressed_total = sum(_parse_size_to_bytes(d.size_display) for d in dumps)
+    required = max(compressed_total * _DISK_ESTIMATE_MULTIPLIER, _DISK_MIN_REQUIRED_BYTES)
+
+    check_dir = work_dir if work_dir.exists() else work_dir.parent
+    free = shutil.disk_usage(check_dir).free
+
+    logger.info(
+        "Disk space check: %.1f GB free, ~%.1f GB estimated needed (%.1f GB compressed x%d).",
+        free / 1024**3, required / 1024**3, compressed_total / 1024**3, _DISK_ESTIMATE_MULTIPLIER,
+    )
+    if free < required:
+        raise RuntimeError(
+            f"Only {free / 1024**3:.1f} GB free at {check_dir}, but this run needs an "
+            f"estimated {required / 1024**3:.1f} GB. Free up disk space before retrying."
+        )
 
 
 def main() -> int:
@@ -50,6 +88,15 @@ def main() -> int:
              "process (e.g. 'labels'). Publishes a real dataset missing the other files - "
              "for exercising the automated publish mechanism cheaply, never for a real month.",
     )
+    parser.add_argument(
+        "--month", type=str, default=None,
+        help="Target month (YYYY-MM). Defaults to the latest month on data.discogs.com.",
+    )
+    parser.add_argument(
+        "--update-metadata-only", action="store_true",
+        help="Skip downloading/converting CSVs; generate metadata (file info + column descriptors), "
+             "update settings on Kaggle, and push/link the companion notebook for the target month.",
+    )
     args = parser.parse_args()
 
     content_types = CONTENT_TYPES
@@ -57,14 +104,20 @@ def main() -> int:
         content_types = tuple(t.strip() for t in args.only_types.split(","))
         logger.warning("--only-types set: restricting this run to %s (debug mode)", content_types)
 
-    logger.info("Checking for the latest Discogs dump month...")
-    month, files = scraper.latest_month_files()
-    logger.info("Latest month with data: %s (%d file(s))", month, len(files))
+    if args.month:
+        month = args.month
+        logger.info("Target month specified: %s", month)
+        _, files = scraper.latest_month_files() # to get file list format reference if needed
+    else:
+        logger.info("Checking for the latest Discogs dump month...")
+        month, files = scraper.latest_month_files()
+        logger.info("Latest month with data: %s (%d file(s))", month, len(files))
 
-    published = state.load_published_months()
-    if month in published and not args.force:
-        logger.info("%s already published to Kaggle. Nothing to do.", month)
-        return 0
+    if not args.update_metadata_only:
+        published = state.load_published_months()
+        if month in published and not args.force:
+            logger.info("%s already published to Kaggle. Nothing to do.", month)
+            return 0
 
     by_type = {f.content_type: f for f in files if f.content_type in content_types}
     missing = [t for t in content_types if t not in by_type]
@@ -77,63 +130,81 @@ def main() -> int:
     work_dir.mkdir(parents=True, exist_ok=True)
     staging_dir.mkdir(parents=True, exist_ok=True)
 
+    if not args.update_metadata_only:
+        try:
+            _ensure_disk_space(work_dir, by_type.values())
+        except RuntimeError as e:
+            logger.error("%s", e)
+            return 1
+
     csv_files: dict[str, Path] = {}
     try:
-        for content_type, dump in by_type.items():
-            csv_name = Path(dump.filename).with_suffix("").with_suffix(".csv").name
-            csv_path = staging_dir / csv_name
+        if not args.update_metadata_only:
+            for content_type, dump in by_type.items():
+                csv_name = Path(dump.filename).with_suffix("").with_suffix(".csv").name
+                csv_path = staging_dir / csv_name
 
-            if csv_path.exists():
-                # Resuming after a failure past this point (e.g. the publish step) - the
-                # CSV conversion is the expensive part (hours for releases), so a retry
-                # must not redo it just because a later step failed.
-                logger.info("%s already converted, reusing %s", dump.filename, csv_path.name)
+                if csv_path.exists():
+                    logger.info("%s already converted, reusing %s", dump.filename, csv_path.name)
+                    csv_files[content_type] = csv_path
+                    continue
+
+                gz_path = work_dir / dump.filename
+                logger.info("Downloading %s (%s)...", dump.filename, dump.size_display)
+                downloader.download(dump.url, gz_path)
+
+                logger.info("Converting %s -> %s ...", dump.filename, csv_name)
+
+                def progress(step: int, total: int, _name=dump.filename) -> None:
+                    if total and step % max(1, total // 10) == 0:
+                        logger.info("  %s: %d%%", _name, int(step / total * 100))
+
+                converter.convert_dump(gz_path, content_type, csv_path, progress_cb=progress)
                 csv_files[content_type] = csv_path
-                continue
 
-            gz_path = work_dir / dump.filename
-            logger.info("Downloading %s (%s)...", dump.filename, dump.size_display)
-            downloader.download(dump.url, gz_path)
+                gz_path.unlink(missing_ok=True)
 
-            logger.info("Converting %s -> %s ...", dump.filename, csv_name)
+            cover_path = staging_dir / "dataset-cover-image.png"
+            logger.info("Generating cover image for %s...", month)
+            cover_art.generate_cover_image(month, cover_path)
 
-            def progress(step: int, total: int, _name=dump.filename) -> None:
-                if total and step % max(1, total // 10) == 0:
-                    logger.info("  %s: %d%%", _name, int(step / total * 100))
+            logger.info("Building Kaggle dataset metadata...")
+            kaggle_publish.build_dataset_metadata(staging_dir, args.kaggle_owner, month, csv_files)
 
-            converter.convert_dump(gz_path, content_type, csv_path, progress_cb=progress)
-            csv_files[content_type] = csv_path
+            if args.replace_existing:
+                dataset_slug = kaggle_publish.dataset_slug_for(month)
+                logger.info("--replace-existing set: deleting %s/%s before re-publishing...", args.kaggle_owner, dataset_slug)
+                try:
+                    kaggle_publish.delete_dataset(args.kaggle_owner, dataset_slug)
+                except RuntimeError as e:
+                    logger.warning("Delete failed (dataset may not exist yet, continuing): %s", e)
 
-            # Free disk immediately: the compressed dump isn't needed once its CSV exists.
-            gz_path.unlink(missing_ok=True)
+            logger.info("Publishing to Kaggle...")
+            kaggle_publish.publish_dataset(staging_dir)
+        else:
+            # Metadata update only mode: construct dummy header files if missing to generate schema metadata
+            for content_type, dump in by_type.items():
+                csv_name = Path(dump.filename).with_suffix("").with_suffix(".csv").name
+                csv_path = staging_dir / csv_name
+                if not csv_path.exists():
+                    descs = kaggle_publish._load_descriptions(content_type)
+                    csv_path.write_text(",".join(descs.keys()) + "\n", encoding="utf-8")
+                csv_files[content_type] = csv_path
 
-        # Must be named exactly "dataset-cover-image.<ext>" - the kaggle CLI auto-detects
-        # this specific filename as a sibling of dataset-metadata.json and uploads it as
-        # the dataset's actual cover image (not just a regular file in the listing).
-        # Regenerated every run (unlike the CSVs) so a --keep-staging iteration loop that's
-        # tweaking cover_art.py picks up each change instead of reusing a stale image.
-        cover_path = staging_dir / "dataset-cover-image.png"
-        logger.info("Generating cover image for %s...", month)
-        cover_art.generate_cover_image(month, cover_path)
+            cover_path = staging_dir / "dataset-cover-image.png"
+            if not cover_path.exists():
+                logger.info("Generating cover image for %s...", month)
+                cover_art.generate_cover_image(month, cover_path)
 
-        logger.info("Building Kaggle dataset metadata...")
-        kaggle_publish.build_dataset_metadata(staging_dir, args.kaggle_owner, month, csv_files)
+            logger.info("Building Kaggle dataset metadata...")
+            kaggle_publish.build_dataset_metadata(staging_dir, args.kaggle_owner, month, csv_files)
 
-        if args.replace_existing:
-            dataset_slug = kaggle_publish.dataset_slug_for(month)
-            logger.info("--replace-existing set: deleting %s/%s before re-publishing...", args.kaggle_owner, dataset_slug)
-            try:
-                kaggle_publish.delete_dataset(args.kaggle_owner, dataset_slug)
-            except RuntimeError as e:
-                logger.warning("Delete failed (dataset may not exist yet, continuing): %s", e)
-
-        logger.info("Publishing to Kaggle...")
-        kaggle_publish.publish_dataset(staging_dir)
-
-        # `create` doesn't apply userSpecifiedSources (Provenance) or expectedUpdateFrequency
-        # - a second call against the now-existing dataset is required for those.
-        logger.info("Updating provenance/update-frequency settings...")
         dataset_slug = kaggle_publish.dataset_slug_for(month)
+
+        logger.info("Waiting for dataset to reach 'ready' status on Kaggle...")
+        kaggle_publish.wait_for_dataset_ready(args.kaggle_owner, dataset_slug)
+
+        logger.info("Updating provenance, file descriptions, column descriptors & settings...")
         kaggle_publish.update_dataset_settings(args.kaggle_owner, dataset_slug, staging_dir)
 
         logger.info("Publishing companion starter notebook...")
@@ -143,6 +214,27 @@ def main() -> int:
             {ctype: path.name for ctype, path in csv_files.items()},
         )
         notebook.push_notebook(notebook_dir)
+        kernel_ref = f"{args.kaggle_owner}/{notebook.kernel_slug_for(dataset_slug)}"
+        notebook.wait_for_run(kernel_ref)
+
+        logger.info("Filling file and column descriptions via web session...")
+        usability_score: float | None = None
+        try:
+            import fill_descriptions
+            rating = fill_descriptions.fill_month(args.kaggle_owner, month, content_types)
+            state.clear_descriptions_pending(month)
+            usability_score = rating.get("score")
+            logger.info("%s web descriptions filled. Final usability rating: %s", month, usability_score)
+        except Exception as e:
+            state.mark_descriptions_pending(month)
+            logger.warning("Web description update for %s skipped/queued for later: %s", month, e)
+
+        # Only a perfect score means Kaggle's "Pending Actions" checklist is actually
+        # clear - the documented API can report success (no exception above) while
+        # provenance, notebook linkage, or descriptions are still silently unmet (see
+        # web_metadata module docstring). Local files stay in place whenever that isn't
+        # confirmed, so a retry has real data to work with instead of an unrecoverable gap.
+        metadata_complete = usability_score is not None and usability_score >= 0.999
 
         if content_types == CONTENT_TYPES:
             state.mark_published(month)
@@ -157,12 +249,21 @@ def main() -> int:
         )
         return 1
     else:
-        # Only reclaim disk on success - these are multi-GB working sets, but the whole
-        # point of keeping them on failure (or with --keep-staging) is so a retry is cheap.
-        if not args.keep_staging:
-            shutil.rmtree(work_dir, ignore_errors=True)
-        else:
+        # Only reclaim disk once the dataset is verifiably complete (perfect usability
+        # score) - these are multi-GB working sets, but the whole point of keeping them on
+        # failure, an imperfect score, or with --keep-staging is so a retry is cheap and
+        # nothing has to be re-downloaded/re-converted.
+        if args.keep_staging:
             logger.info("--keep-staging set: leaving %s in place for fast re-publish iteration.", work_dir)
+        elif not metadata_complete:
+            logger.warning(
+                "Leaving %s in place: usability score is %s, not a perfect 1.0 yet. "
+                "Re-run (or `fill_descriptions.py --pending`) once that's resolved, then "
+                "this will clean up on the next fully-complete run.",
+                work_dir, usability_score,
+            )
+        else:
+            shutil.rmtree(work_dir, ignore_errors=True)
         return 0
 
 

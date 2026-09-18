@@ -1,9 +1,9 @@
 """Generates and publishes a starter Kaggle notebook for a month's dataset.
 
 Kaggle's "Pending Actions" checklist asks every dataset to ship a companion notebook
-("Provide an example of the data in use so other users can get started quickly"), and
-it's the one remaining item the public API actually honours - unlike per-file/per-column
-descriptions, which Kaggle accepts and silently discards (see kaggle_publish.py).
+("Provide an example of the data in use so other users can get started quickly"), file
+descriptions ("Add file information"), and column descriptors ("Include column descriptors").
+All three are automatically created and pushed upon dataset readiness.
 
 The notebook is written as raw nbformat v4 JSON rather than via the nbformat package so
 this stays dependency-free. It has to actually run on Kaggle's servers, so every read is
@@ -15,6 +15,7 @@ import json
 import logging
 import subprocess
 import sys
+import time
 from calendar import month_name
 from pathlib import Path
 
@@ -304,3 +305,46 @@ def push_notebook(notebook_dir: Path) -> None:
     if result.returncode != 0:
         logger.error("kaggle kernels push stderr: %s", result.stderr.strip())
         raise RuntimeError(f"Kaggle notebook push failed (exit {result.returncode})")
+
+
+def wait_for_run(
+    kernel_ref: str,  # "owner_slug/kernel_slug"
+    timeout_seconds: int = 900,
+    poll_interval: int = 15,
+) -> None:
+    """Blocks until the just-pushed notebook finishes executing on Kaggle.
+
+    `kernels push` only queues a run; the dataset's "Publish a notebook" pending-action
+    item only clears once that run actually finishes successfully, not merely on push.
+    Raises on failure/timeout so a broken notebook is visible instead of silently leaving
+    that checklist item unmet.
+    """
+    from kaggle.api.kaggle_api_extended import KaggleApi
+    from kagglesdk.kernels.types.kernels_enums import KernelWorkerStatus
+
+    api = KaggleApi()
+    api.authenticate()
+    terminal = {
+        KernelWorkerStatus.COMPLETE,
+        KernelWorkerStatus.ERROR,
+        KernelWorkerStatus.CANCEL_ACKNOWLEDGED,
+    }
+    start_time = time.time()
+    logger.info("Waiting for notebook %s to finish running...", kernel_ref)
+    while time.time() - start_time < timeout_seconds:
+        try:
+            result = api.kernels_status(kernel_ref)
+        except Exception as e:
+            logger.warning("Error querying kernel status for %s: %s", kernel_ref, e)
+            time.sleep(poll_interval)
+            continue
+        if result.status in terminal:
+            if result.status != KernelWorkerStatus.COMPLETE:
+                raise RuntimeError(
+                    f"Notebook {kernel_ref} finished with status {result.status.name}: "
+                    f"{result.failure_message}"
+                )
+            logger.info("Notebook %s finished running successfully.", kernel_ref)
+            return
+        time.sleep(poll_interval)
+    raise TimeoutError(f"Notebook {kernel_ref} did not finish running within {timeout_seconds} seconds")

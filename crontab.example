@@ -7,6 +7,17 @@
 # published - whenever it lands, this catches it within 24 hours instead of waiting for
 # next month if a fixed day is missed.
 #
+# The real, rotating log is logs/sync.log, written directly by the script itself
+# (discogs_kaggle_sync/logging_setup.py) - it keeps 14 days of history on its own, so
+# nothing here should also append to that same path forever. The redirect below is only a
+# crash-catch net for failures before Python's own logging even starts (e.g. the venv
+# python isn't where this line says); `>` overwrites it each run instead of `>>` so it
+# never grows unbounded, since anything worth keeping is already in logs/sync.log.
+#
 # Install with: crontab -e   (then paste the line below, adjusting paths)
 
-0 6 * * * cd /path/to/Discogs_Kaggle_Sync && /path/to/venv/bin/python run_monthly_sync.py --work-dir ./work --kaggle-owner ofurkancoban >> logs/sync.log 2>&1
+0 6 * * * cd /path/to/Discogs_Kaggle_Sync && /path/to/venv/bin/python run_monthly_sync.py --work-dir ./work --kaggle-owner ofurkancoban > logs/cron-last-run.log 2>&1
+
+# Optional: catch drift between "marked published" and "actually complete on Kaggle"
+# (see fill_descriptions.py --audit) once a week.
+0 7 * * 1 cd /path/to/Discogs_Kaggle_Sync && /path/to/venv/bin/python fill_descriptions.py --kaggle-owner ofurkancoban --audit > logs/cron-audit.log 2>&1
