@@ -9,6 +9,7 @@ wrongly-colored shadow. This mirrors that final version so both projects render 
 """
 from __future__ import annotations
 
+import base64
 import logging
 import math
 import os
@@ -26,33 +27,42 @@ DEFAULT_LOGO = ASSETS_DIR / "logo.png"
 DEFAULT_FONT = ASSETS_DIR / "dreamorphanagehv-regular.otf"
 ENV_FILE = ASSETS_DIR.parent / ".env"
 
-# Free tier of Hugging Face's router-based Inference Providers API - the only
-# text-to-image model currently live on the free "hf-inference" provider (most popular
-# ones, e.g. FLUX/SDXL, have been deprecated there in favor of paid providers). Verified
-# working during prompt testing; if HF discontinues this model too, generate_ai_background
-# will start raising and generate_monthly_cover falls back to the static base image.
-HF_API_URL = "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-3-medium-diffusers"
-HF_IMAGE_WIDTH = 1344
-HF_IMAGE_HEIGHT = 672
+IMAGE_WIDTH = 1344
+IMAGE_HEIGHT = 672
 
-# Tuned through visual A/B testing (see conversation history / cover_art_tests/ scratch
-# output, not committed): wide-angle + "retail sales floor" framing reads as a real record
-# shop instead of a warehouse, and "plain dim wall space in upper center" keeps that area
-# clear enough for the logo + year/month text to stay legible.
-HF_PROMPT = (
+# Tuned through visual A/B testing (see conversation history, not committed): wide-angle +
+# "record shop" framing reads as a real shop instead of a warehouse, candid/asymmetric
+# framing avoids the stiffness of a dead-center composition, and "plain dim wall space in
+# upper area" keeps that area clear enough for the logo + year/month text to stay legible.
+BACKGROUND_PROMPT = (
     "vintage analog film photograph, muted natural colors with warm undertones, moderately "
     "dark moody lighting but details still visible, subtle film grain, 1970s record shop "
-    "aesthetic, ultra wide angle lens, wide angle photo of a curated record shop sales "
-    "floor, vinyl records in browsing crates with genre tabs, turntable display on the "
-    "counter, warm retail lighting, plain dim wall space in upper center, sharp focus"
+    "aesthetic, ultra wide angle lens, candid off-center angle, natural asymmetric "
+    "composition, highly detailed, wide angle photo of a lived-in record shop caught "
+    "candidly, stacks and crates of vinyl records slightly askew, posters and memorabilia "
+    "on the walls, warm lamp lighting, plain dim wall space in upper area, sharp focus"
 )
-HF_NEGATIVE_PROMPT = (
+BACKGROUND_NEGATIVE_PROMPT = (
     "text, letters, words, signage, neon sign, writing, typography, watermark, logo, "
     "people, faces, blurry, low quality, distorted, cropped, oversaturated, vibrant "
     "colors, neon colors, bright white light, overexposed, washed out, monochrome, "
     "single color tint, warehouse, storage room, archive, floor to ceiling shelving, "
-    "industrial"
+    "industrial, symmetric, centered composition"
 )
+
+# Cloudflare Workers AI (free tier: 10,000 neurons/day, resets daily - well suited to a
+# once-a-month cover generation). Tried first since lucid-origin's output quality was
+# consistently better than Hugging Face's in side-by-side testing.
+CF_MODEL = "@cf/leonardo/lucid-origin"
+
+# Hugging Face's router-based Inference Providers API (free tier: a small monthly credit
+# allowance that a burst of use - e.g. prompt-testing, or several backfilled months in a
+# row - can exhaust for the rest of the month). Kept as a secondary fallback since it's a
+# different quota pool than Cloudflare's, not because it's the preferred provider.
+# stable-diffusion-3-medium-diffusers is the only text-to-image model currently live on
+# the free "hf-inference" provider (most popular ones, e.g. FLUX/SDXL, have been
+# deprecated there in favor of paid providers).
+HF_API_URL = "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-3-medium-diffusers"
 
 # Every pixel constant below (Y_OFFSET, LINE_SPACING, font_size) was tuned against a
 # background image this tall - a differently-sized base image (e.g. an AI-generated one)
@@ -188,37 +198,71 @@ def generate_cover_image(
     return output_path
 
 
-def _hf_token() -> str | None:
-    token = os.getenv("HF")
-    if token:
-        return token
+def _env_var(name: str) -> str | None:
+    value = os.getenv(name)
+    if value:
+        return value
     if ENV_FILE.exists():
         for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
             line = line.strip()
-            if line.startswith("HF="):
+            if line.startswith(f"{name}="):
                 return line.split("=", 1)[1].strip()
     return None
 
 
-def generate_ai_background(output_path: Path, seed: int | None = None) -> Path:
+def generate_cf_background(output_path: Path, seed: int | None = None) -> Path:
+    """Generates a fresh record-shop background photo via Cloudflare Workers AI's free
+    lucid-origin model. A random seed each call is the point - every month gets a
+    visually distinct photo instead of reusing one background forever. Raises on missing
+    credentials or a failed/slow request; generate_monthly_cover catches that and tries
+    the next provider, so a sync run is never blocked on this."""
+    account_id = _env_var("CF_ACCOUNT_ID")
+    token = _env_var("CF_API_TOKEN")
+    if not account_id or not token:
+        raise RuntimeError("No CF_ACCOUNT_ID/CF_API_TOKEN found in .env for AI cover art generation.")
+    if seed is None:
+        seed = random.randint(0, 2**31 - 1)
+
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{CF_MODEL}"
+    payload = {
+        "prompt": BACKGROUND_PROMPT,
+        "negative_prompt": BACKGROUND_NEGATIVE_PROMPT,
+        "width": IMAGE_WIDTH,
+        "height": IMAGE_HEIGHT,
+        "seed": seed,
+    }
+    response = requests.post(
+        url, headers={"Authorization": f"Bearer {token}"}, json=payload, timeout=120,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if not data.get("success"):
+        raise RuntimeError(f"Cloudflare Workers AI request failed: {data.get('errors')}")
+
+    image_bytes = base64.b64decode(data["result"]["image"])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(image_bytes)
+    logger.info("Generated AI cover background via Cloudflare (seed=%d) -> %s", seed, output_path)
+    return output_path
+
+
+def generate_hf_background(output_path: Path, seed: int | None = None) -> Path:
     """Generates a fresh record-shop background photo via Hugging Face's free
-    stable-diffusion-3-medium inference endpoint. A random seed each call is the point -
-    every month gets a visually distinct photo instead of reusing one background forever.
-    Raises on a missing token or a failed/slow request; generate_monthly_cover is what
-    catches that and falls back to the static base image, so a sync run is never blocked
-    on this."""
-    token = _hf_token()
+    stable-diffusion-3-medium inference endpoint. Secondary fallback behind Cloudflare -
+    see the HF_API_URL comment for why. Raises on a missing token or a failed/slow
+    request; generate_monthly_cover is what catches that and falls back further."""
+    token = _env_var("HF")
     if not token:
         raise RuntimeError("No HF token found (set HF=<token> in .env) for AI cover art generation.")
     if seed is None:
         seed = random.randint(0, 2**31 - 1)
 
     payload = {
-        "inputs": HF_PROMPT,
+        "inputs": BACKGROUND_PROMPT,
         "parameters": {
-            "width": HF_IMAGE_WIDTH,
-            "height": HF_IMAGE_HEIGHT,
-            "negative_prompt": HF_NEGATIVE_PROMPT,
+            "width": IMAGE_WIDTH,
+            "height": IMAGE_HEIGHT,
+            "negative_prompt": BACKGROUND_NEGATIVE_PROMPT,
             "seed": seed,
         },
     }
@@ -228,20 +272,24 @@ def generate_ai_background(output_path: Path, seed: int | None = None) -> Path:
     response.raise_for_status()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(response.content)
-    logger.info("Generated AI cover background (seed=%d) -> %s", seed, output_path)
+    logger.info("Generated AI cover background via Hugging Face (seed=%d) -> %s", seed, output_path)
     return output_path
 
 
 def generate_monthly_cover(month: str, output_path: Path, seed: int | None = None) -> Path:
-    """Entry point sync callers should use: a fresh AI-generated background each month,
-    falling back to the static base image (with its own baked-in logo) if AI generation
-    isn't available for any reason - no token, API down, rate limited, model deprecated."""
+    """Entry point sync callers should use: a fresh AI-generated background each month -
+    Cloudflare first, Hugging Face second (a separate quota pool, in case Cloudflare's
+    daily allowance or Hugging Face's monthly one is exhausted) - falling back to the
+    static base image (with its own baked-in logo) if neither AI provider is available."""
     ai_background_path = output_path.parent / f".ai_background_{month}.jpg"
-    try:
-        generate_ai_background(ai_background_path, seed=seed)
-        return generate_cover_image(month, output_path, base_image_path=ai_background_path, logo_path=DEFAULT_LOGO)
-    except Exception as e:
-        logger.warning("AI cover background generation failed (%s); using the static base image instead.", e)
-        return generate_cover_image(month, output_path, base_image_path=DEFAULT_BASE_IMAGE, logo_path=None)
-    finally:
-        ai_background_path.unlink(missing_ok=True)
+    for name, generate in (("Cloudflare", generate_cf_background), ("Hugging Face", generate_hf_background)):
+        try:
+            generate(ai_background_path, seed=seed)
+            return generate_cover_image(month, output_path, base_image_path=ai_background_path, logo_path=DEFAULT_LOGO)
+        except Exception as e:
+            logger.warning("%s cover background generation failed: %s", name, e)
+        finally:
+            ai_background_path.unlink(missing_ok=True)
+
+    logger.warning("All AI cover providers failed; using the static base image instead.")
+    return generate_cover_image(month, output_path, base_image_path=DEFAULT_BASE_IMAGE, logo_path=None)
