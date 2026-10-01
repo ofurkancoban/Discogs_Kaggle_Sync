@@ -126,6 +126,19 @@ def main() -> int:
     by_type = {f.content_type: f for f in files if f.content_type in content_types}
     missing = [t for t in content_types if t not in by_type]
     if missing:
+        if not args.month and not args.only_types:
+            # The automatic "latest month" case: Discogs publishes a new month's 4 files
+            # incrementally over the following days/hours rather than all at once, so a
+            # new month appearing with some types still missing is the normal, expected
+            # state on a given day - not a failure. Treat it the same as "nothing new
+            # yet" and let tomorrow's run (or the day after) pick it up once complete.
+            logger.info(
+                "%s has appeared but isn't fully published yet (missing %s) - "
+                "will check again on the next run.", month, missing,
+            )
+            return 0
+        # An explicit --month or --only-types request is a deliberate ask for specific
+        # files, so missing ones here are worth surfacing as a real error.
         logger.error("Missing expected file type(s) for %s: %s", month, missing)
         return 1
 
