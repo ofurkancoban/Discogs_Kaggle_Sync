@@ -29,7 +29,20 @@ def csv_name_for(month: str, content_type: str) -> str:
 
 
 def fill_month(owner_slug: str, month: str, content_types: tuple[str, ...]) -> dict:
-    """Writes one month's file and column descriptions, returning the usability rating."""
+    """Writes one month's file and column descriptions, returning the usability rating.
+
+    Checks (and auto-refreshes, via check_session's auto_login fallback) the web session
+    before writing - callers that reach this directly rather than through main()
+    (run_monthly_sync.py does, bypassing the CLI's own --check-session preflight) would
+    otherwise hit a stale session with no attempt to refresh it, as happened in production
+    for 2026-10: the session had lapsed, the write failed, and the month sat in
+    pending_descriptions.json indefinitely since nothing ever retried it with a fresh
+    session - --pending isn't scheduled anywhere, only the daily sync and weekly audit are.
+    """
+    ok, detail = web_metadata.check_session()
+    if not ok:
+        raise web_metadata.KaggleWebSessionError(f"No usable Kaggle web session: {detail}")
+
     file_descriptions: dict[str, str] = {}
     column_descriptions: dict[str, dict[str, str]] = {}
     for content_type in content_types:

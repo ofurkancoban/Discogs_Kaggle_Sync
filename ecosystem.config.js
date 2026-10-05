@@ -36,6 +36,23 @@ module.exports = {
       time: true,
     },
     {
+      // Catches up any month queued in state/pending_descriptions.json (a lapsed web
+      // session when run_monthly_sync.py tried to fill descriptions/provenance) - daily,
+      // shortly after the main sync. Without this scheduled somewhere, a queued month
+      // sits there indefinitely: nothing else ever retries it (confirmed in production -
+      // 2026-10 sat pending for 3 days until this was added).
+      name: "discogs-kaggle-pending",
+      script: "fill_descriptions.py",
+      interpreter: "./.venv/bin/python3",
+      args: "--kaggle-owner ofurkancoban --pending",
+      cron_restart: "30 6 * * *",
+      autorestart: false,
+      watch: false,
+      out_file: "./logs/pm2-pending.out.log",
+      error_file: "./logs/pm2-pending.err.log",
+      time: true,
+    },
+    {
       // Optional: catch drift between "marked published" and "actually complete on
       // Kaggle" (see fill_descriptions.py --audit) once a week.
       name: "discogs-kaggle-audit",

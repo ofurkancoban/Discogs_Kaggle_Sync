@@ -18,6 +18,12 @@
 
 0 6 * * * cd /path/to/Discogs_Kaggle_Sync && /path/to/venv/bin/python run_monthly_sync.py --work-dir ./work --kaggle-owner ofurkancoban > logs/cron-last-run.log 2>&1
 
+# Catches up any month queued in state/pending_descriptions.json (a lapsed web session
+# when the main sync tried to fill descriptions/provenance) - daily, shortly after the
+# main sync. Without this scheduled, a queued month sits there indefinitely - nothing
+# else ever retries it.
+30 6 * * * cd /path/to/Discogs_Kaggle_Sync && /path/to/venv/bin/python fill_descriptions.py --kaggle-owner ofurkancoban --pending > logs/cron-pending.log 2>&1
+
 # Optional: catch drift between "marked published" and "actually complete on Kaggle"
 # (see fill_descriptions.py --audit) once a week.
 0 7 * * 1 cd /path/to/Discogs_Kaggle_Sync && /path/to/venv/bin/python fill_descriptions.py --kaggle-owner ofurkancoban --audit > logs/cron-audit.log 2>&1
